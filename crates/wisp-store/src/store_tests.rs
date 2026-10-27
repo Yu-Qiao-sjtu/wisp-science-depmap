@@ -684,6 +684,130 @@ async fn token_usage_folds_usage_events_into_root_sessions() {
 }
 
 #[tokio::test]
+async fn subagent_conversations_stay_listed_and_remember_their_parent() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_store_subagent_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    for id in ["parent", "sub"] {
+        store.create_frame(id, "p", "OPERON", "m").await.unwrap();
+        store
+            .append_message(id, 1, &Message::user("hello"))
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.session_dispatched_from("sub").await.unwrap(), None);
+    store
+        .set_session_dispatched_from("sub", "parent")
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .session_dispatched_from("sub")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("parent")
+    );
+    assert_eq!(
+        store.list_dispatched_sessions("p").await.unwrap(),
+        std::collections::HashMap::from([("sub".to_string(), "parent".to_string())])
+    );
+    // Unlike a delegated child frame, a subagent is a conversation of its own.
+    assert_eq!(store.list_sessions("p").await.unwrap().len(), 2);
+    drop(store);
+    // Reopening re-runs the idempotent migrations and keeps the link.
+    let store = Store::open(&tmp).await.unwrap();
+    assert_eq!(
+        store
+            .session_dispatched_from("sub")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("parent")
+    );
+
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[tokio::test]
+async fn subagents_inherit_folders_and_move_with_the_persisted_family() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("subagent-folders.sqlite");
+    let store = Store::open(&path).await.unwrap();
+    for project in ["p", "other"] {
+        store.create_project(project, project, "").await.unwrap();
+    }
+    for folder in ["a", "b"] {
+        store.create_folder(folder, "p", folder).await.unwrap();
+    }
+    for (id, project) in [
+        ("parent", "p"),
+        ("sub", "p"),
+        ("branch", "p"),
+        ("unrelated", "p"),
+        ("foreign", "other"),
+    ] {
+        store
+            .create_frame(id, project, "OPERON", "m")
+            .await
+            .unwrap();
+        store.rename_session(id, project, id).await.unwrap();
+    }
+    store
+        .move_session_to_folder("parent", "p", Some("a"))
+        .await
+        .unwrap();
+    store
+        .set_session_dispatched_from("sub", "parent")
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .list_sessions("p")
+            .await
+            .unwrap()
+            .iter()
+            .find(|s| s.0 == "sub")
+            .unwrap()
+            .3
+            .as_deref(),
+        Some("a")
+    );
+    store
+        .set_session_branched_from("branch", "sub")
+        .await
+        .unwrap();
+    store
+        .set_session_dispatched_from("foreign", "parent")
+        .await
+        .unwrap();
+    store.set_session_pinned("sub", "p", true).await.unwrap();
+    for folder in [Some("b"), None, Some("a")] {
+        store
+            .move_session_to_folder("parent", "p", folder)
+            .await
+            .unwrap();
+        let reopened = Store::open(&path).await.unwrap();
+        for row in reopened.list_sessions("p").await.unwrap() {
+            assert_eq!(
+                row.3.as_deref(),
+                if row.0 == "unrelated" { None } else { folder },
+                "{}",
+                row.0
+            );
+        }
+        assert!(reopened.list_sessions("other").await.unwrap()[0]
+            .3
+            .is_none());
+        reopened.pool.close().await;
+    }
+    store.pool.close().await;
+}
+
+#[tokio::test]
 async fn child_agent_frames_stay_out_of_top_level_session_history() {
     let tmp = std::env::temp_dir().join(format!(
         "wisp_store_child_frames_{}.sqlite",
@@ -776,6 +900,47 @@ async fn frame_models_are_session_scoped() {
         Some("m1")
     );
     assert!(store.set_frame_model("first", "other", "m3").await.is_err());
+    store.pool.close().await;
+    let _ = std::fs::remove_file(tmp);
+}
+
+#[tokio::test]
+async fn last_turn_outcome_is_the_latest_turn_end_of_that_frame() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_store_turn_outcome_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    for frame in ["first", "second"] {
+        store.create_frame(frame, "p", "OPERON", "").await.unwrap();
+    }
+    let event = |kind: &str| format!(r#"{{"kind":"{kind}","frame_id":"first"}}"#);
+    assert_eq!(store.last_turn_outcome("first").await.unwrap(), None);
+
+    for (seq, kind) in [(1, "User"), (2, "Done"), (3, "User"), (4, "Error")] {
+        store
+            .append_session_ui_event("first", seq, &event(kind))
+            .await
+            .unwrap();
+    }
+    // Events after the turn end, such as usage, do not hide it.
+    store
+        .append_session_ui_event("first", 5, &event("Usage"))
+        .await
+        .unwrap();
+    store
+        .append_session_ui_event("second", 1, &event("Done"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.last_turn_outcome("first").await.unwrap().as_deref(),
+        Some("Error")
+    );
+    assert_eq!(
+        store.last_turn_outcome("second").await.unwrap().as_deref(),
+        Some("Done")
+    );
     store.pool.close().await;
     let _ = std::fs::remove_file(tmp);
 }
@@ -1438,7 +1603,7 @@ async fn workflow_run_activity_recovery_preserves_valid_link_and_fails_missing_l
 }
 
 #[tokio::test]
-async fn workflow_cancellation_is_persisted_and_cleared_for_retry() {
+async fn workflow_cancellation_is_retained_but_does_not_cancel_retry() {
     let tmp =
         std::env::temp_dir().join(format!("wisp_agent_cancel_{}.sqlite", uuid::Uuid::new_v4()));
     let store = Store::open(&tmp).await.unwrap();
@@ -1510,9 +1675,440 @@ async fn workflow_cancellation_is_persisted_and_cleared_for_retry() {
         .await
         .unwrap());
     assert!(!store.agent_workflow_cancel_requested("wf").await.unwrap());
+    assert!(
+        store
+            .get_agent_workflow_attempt("attempt")
+            .await
+            .unwrap()
+            .unwrap()
+            .cancel_requested
+    );
+    assert_eq!(
+        store
+            .get_agent_workflow("wf")
+            .await
+            .unwrap()
+            .unwrap()
+            .execution_generation,
+        1
+    );
 
     store.pool.close().await;
     let _ = std::fs::remove_file(tmp);
+}
+
+#[tokio::test]
+async fn workflow_deadline_starts_at_execution_not_draft_or_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+    store.create_project("p", "Project", "").await.unwrap();
+    let mut workflow = AgentWorkflow::new("wf", "p", "workspace", "Delayed approval").unwrap();
+    workflow.created_at = chrono::Utc::now().timestamp() - 10_000;
+    workflow.root_limits_json = serde_json::to_string(&AgentDelegationRootLimits {
+        wall_time_secs: Some(600),
+        ..Default::default()
+    })
+    .unwrap();
+    let step = nested_test_step("step", "wf", false, 100);
+    store
+        .create_agent_workflow_plan(&workflow, &[step])
+        .await
+        .unwrap();
+    assert!(store.approve_agent_workflow_plan("wf", 1).await.unwrap());
+    sqlx::query("UPDATE agent_workflows SET approved_at=1 WHERE id='wf'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    assert!(store
+        .agent_workflow_stop_reason("wf")
+        .await
+        .unwrap()
+        .is_none());
+    let before_start = chrono::Utc::now().timestamp();
+    assert!(store
+        .transition_agent_workflow_status(
+            "wf",
+            AgentWorkflowStatus::Approved,
+            AgentWorkflowStatus::Running
+        )
+        .await
+        .unwrap());
+    let running = store.get_agent_workflow("wf").await.unwrap().unwrap();
+    assert!(running.execution_started_at.unwrap() >= before_start);
+    assert_eq!(running.created_at, workflow.created_at);
+    let attempt =
+        AgentWorkflowAttempt::queued("a", "wf", "step", 1, "request", "local", "{}").unwrap();
+    assert!(matches!(
+        store
+            .try_create_started_agent_workflow_attempt(attempt)
+            .await
+            .unwrap(),
+        AgentWorkflowAttemptStart::Started(_)
+    ));
+    assert!(!store.agent_workflow_cancel_requested("wf").await.unwrap());
+}
+
+#[tokio::test]
+async fn workflow_retry_refreshes_expired_time_and_spent_budget_without_erasing_history() {
+    for revise_budget in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+        let mut first = create_running_nested_test_root(
+            &store,
+            AgentDelegationRootLimits {
+                max_tokens: 100,
+                wall_time_secs: Some(600),
+                ..Default::default()
+            },
+            false,
+            50,
+        )
+        .await;
+        // Simulate time passing without a sleep or external provider.
+        sqlx::query("UPDATE agent_workflows SET execution_started_at=1 WHERE id='root'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let reason = store
+            .agent_workflow_stop_reason("root")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(reason.contains("timed out after 600 seconds"));
+        // A later cancel must not replace the actual timeout cause.
+        store.request_agent_workflow_cancel("root").await.unwrap();
+        assert_eq!(
+            store.agent_workflow_stop_reason("root").await.unwrap(),
+            Some(reason)
+        );
+        first.status = AgentWorkflowAttemptStatus::Cancelled;
+        first.cancel_requested = true;
+        first.input_tokens = 110;
+        first.tool_calls = 18;
+        first.finished_at = Some(chrono::Utc::now().timestamp());
+        assert!(store
+            .update_agent_workflow_attempt(&first, AgentWorkflowAttemptStatus::Running)
+            .await
+            .unwrap());
+        assert!(store
+            .transition_agent_workflow_status(
+                "root",
+                AgentWorkflowStatus::Running,
+                AgentWorkflowStatus::Cancelled
+            )
+            .await
+            .unwrap());
+        let old = store.get_agent_workflow("root").await.unwrap().unwrap();
+        if revise_budget {
+            let mut steps = store.list_agent_workflow_steps("root").await.unwrap();
+            steps[0].budget_json = serde_json::json!({"max_tokens": 60}).to_string();
+            assert!(store
+                .replace_agent_workflow_plan_for_retry(&old, &steps, old.status, old.version)
+                .await
+                .unwrap());
+        } else {
+            assert!(store
+                .transition_agent_workflow_status("root", old.status, AgentWorkflowStatus::Approved)
+                .await
+                .unwrap());
+        }
+        let retry = store.get_agent_workflow("root").await.unwrap().unwrap();
+        assert_eq!(retry.execution_generation, 1);
+        assert_eq!(retry.created_at, old.created_at);
+        assert!(retry.execution_started_at.is_none());
+        assert!(retry.stop_reason.is_none());
+        assert!(!store.agent_workflow_cancel_requested("root").await.unwrap());
+        let summary = store
+            .agent_workflow_execution_summary("root")
+            .await
+            .unwrap();
+        assert_eq!(summary.usage.tokens, 0);
+        assert_eq!(summary.cumulative_usage.tokens, 110);
+        assert_eq!(summary.limits.tokens, 100);
+        let historical = store
+            .get_agent_workflow_attempt(&first.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(historical.cancel_requested);
+        assert_eq!(historical.status, AgentWorkflowAttemptStatus::Cancelled);
+        assert_eq!(historical.input_tokens, first.input_tokens);
+        assert_eq!(historical.execution_generation, 0);
+        assert!(store
+            .transition_agent_workflow_status(
+                "root",
+                AgentWorkflowStatus::Approved,
+                AgentWorkflowStatus::Running
+            )
+            .await
+            .unwrap());
+        let second = AgentWorkflowAttempt::queued(
+            "second",
+            "root",
+            "root-step",
+            2,
+            "request-2",
+            "local",
+            "{}",
+        )
+        .unwrap();
+        let AgentWorkflowAttemptStart::Started(second) = store
+            .try_create_started_agent_workflow_attempt(second)
+            .await
+            .unwrap()
+        else {
+            panic!("the old timeout and old token usage must not prevent a retry");
+        };
+        assert_eq!(second.execution_generation, 1);
+        assert!(second.started_at.unwrap() > 1);
+    }
+}
+
+#[tokio::test]
+async fn unlimited_workflow_budgets_admit_work_after_large_usage_and_allow_delegation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+    let mut first = create_running_nested_test_root(
+        &store,
+        AgentDelegationRootLimits {
+            max_depth: 2,
+            max_tokens: 0,
+            max_tool_calls: 0,
+            max_cost_microunits: 0,
+            wall_time_secs: None,
+            ..Default::default()
+        },
+        true,
+        500_000,
+    )
+    .await;
+    assert!(store
+        .agent_workflow_attempt_has_delegation_capacity(&first.id)
+        .await
+        .unwrap());
+    first.status = AgentWorkflowAttemptStatus::Succeeded;
+    first.response_json = Some(r#"{"status":"succeeded"}"#.into());
+    first.input_tokens = 489_967;
+    first.output_tokens = 7_709;
+    first.tool_calls = 600;
+    first.cost_microunits = 9_000_000;
+    assert!(store
+        .update_agent_workflow_attempt(&first, AgentWorkflowAttemptStatus::Running)
+        .await
+        .unwrap());
+    let mut next = AgentWorkflowAttempt::queued(
+        "next",
+        "root",
+        "root-step",
+        2,
+        "next-request",
+        "local",
+        "{}",
+    )
+    .unwrap();
+    next.allow_delegation = true;
+    assert!(matches!(
+        store
+            .try_create_started_agent_workflow_attempt(next)
+            .await
+            .unwrap(),
+        AgentWorkflowAttemptStart::Started(_)
+    ));
+    let summary = store
+        .agent_workflow_execution_summary("root")
+        .await
+        .unwrap();
+    assert_eq!(summary.limits, wisp_dto::AgentWorkflowUsage::default());
+    assert_eq!(summary.usage.tokens, 497_676);
+    assert_eq!(summary.usage.tool_calls, 600);
+    assert_eq!(summary.usage.cost_microunits, 9_000_000);
+    assert!(store
+        .agent_workflow_stop_reason("root")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn unlimited_root_dimensions_do_not_disable_explicit_finite_dimensions() {
+    for dimension in ["tokens", "tools", "cost"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+        let mut first = create_running_nested_test_root(
+            &store,
+            AgentDelegationRootLimits {
+                max_tokens: if dimension == "tokens" { 100 } else { 0 },
+                max_tool_calls: if dimension == "tools" { 2 } else { 0 },
+                max_cost_microunits: if dimension == "cost" { 2 } else { 0 },
+                ..Default::default()
+            },
+            false,
+            50,
+        )
+        .await;
+        first.status = AgentWorkflowAttemptStatus::Succeeded;
+        first.response_json = Some(r#"{"status":"succeeded"}"#.into());
+        first.input_tokens = 100;
+        first.tool_calls = 2;
+        first.cost_microunits = 2;
+        assert!(store
+            .update_agent_workflow_attempt(&first, AgentWorkflowAttemptStatus::Running)
+            .await
+            .unwrap());
+        let next = AgentWorkflowAttempt::queued(
+            "next",
+            "root",
+            "root-step",
+            2,
+            "next-request",
+            "local",
+            "{}",
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                store
+                    .try_create_started_agent_workflow_attempt(next)
+                    .await
+                    .unwrap(),
+                AgentWorkflowAttemptStart::Stopped(_)
+            ),
+            "{dimension} must still be enforced"
+        );
+    }
+}
+
+#[tokio::test]
+async fn workflow_stop_before_first_attempt_is_durable_and_budget_failure_has_a_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+    let mut first = create_running_nested_test_root(
+        &store,
+        AgentDelegationRootLimits {
+            max_tokens: 100,
+            ..Default::default()
+        },
+        false,
+        50,
+    )
+    .await;
+    first.status = AgentWorkflowAttemptStatus::Failed;
+    first.error = Some("provider failed after producing output".into());
+    first.input_tokens = 90;
+    assert!(store
+        .update_agent_workflow_attempt(&first, AgentWorkflowAttemptStatus::Running)
+        .await
+        .unwrap());
+    let next = AgentWorkflowAttempt::queued(
+        "next",
+        "root",
+        "root-step",
+        2,
+        "next-request",
+        "local",
+        "{}",
+    )
+    .unwrap();
+    let AgentWorkflowAttemptStart::Stopped(reason) = store
+        .try_create_started_agent_workflow_attempt(next)
+        .await
+        .unwrap()
+    else {
+        panic!("same-round usage still enforces the root budget");
+    };
+    assert!(reason.contains("budget is exhausted"));
+    assert_eq!(
+        store.agent_workflow_stop_reason("root").await.unwrap(),
+        Some(reason)
+    );
+    assert!(store
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Running,
+            AgentWorkflowStatus::Failed
+        )
+        .await
+        .unwrap());
+    assert!(store
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Failed,
+            AgentWorkflowStatus::Approved
+        )
+        .await
+        .unwrap());
+    assert!(store
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Approved,
+            AgentWorkflowStatus::Running
+        )
+        .await
+        .unwrap());
+    // No attempts exist yet in the new round, but Cancel must still work.
+    assert_eq!(
+        store.request_agent_workflow_cancel("root").await.unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .agent_workflow_stop_reason("root")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Agent workflow was cancelled by the user.")
+    );
+    let next = AgentWorkflowAttempt::queued(
+        "cancelled-next",
+        "root",
+        "root-step",
+        2,
+        "cancelled-request",
+        "local",
+        "{}",
+    )
+    .unwrap();
+    assert!(matches!(
+        store
+            .try_create_started_agent_workflow_attempt(next)
+            .await
+            .unwrap(),
+        AgentWorkflowAttemptStart::Stopped(_)
+    ));
+}
+
+#[tokio::test]
+async fn workflow_execution_migration_is_idempotent_for_running_and_retried_workflows() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+    create_running_nested_test_root(&store, Default::default(), false, 10).await;
+    sqlx::query("UPDATE agent_workflows SET execution_started_at=NULL WHERE id='root'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agent_workflow_attempts SET started_at=123 WHERE id='root-attempt'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    Store::apply_agent_workflow_execution_rounds(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_agent_workflow("root")
+            .await
+            .unwrap()
+            .unwrap()
+            .execution_started_at,
+        Some(123)
+    );
+    sqlx::query("UPDATE agent_workflows SET execution_generation=2,execution_started_at=456 WHERE id='root'").execute(&store.pool).await.unwrap();
+    Store::apply_agent_workflow_execution_rounds(&store.pool)
+        .await
+        .unwrap();
+    let workflow = store.get_agent_workflow("root").await.unwrap().unwrap();
+    assert_eq!(workflow.execution_generation, 2);
+    assert_eq!(workflow.execution_started_at, Some(456));
 }
 
 #[tokio::test]
@@ -1639,6 +2235,125 @@ async fn nested_agent_fanout_lineage_survives_restart_and_root_cancel() {
     assert_eq!(attempt.root_workflow_id, "root");
     assert_eq!(attempt.parent_attempt_id.as_deref(), Some("root-attempt"));
     assert_eq!(attempt.depth, 2);
+    assert!(reopened
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Running,
+            AgentWorkflowStatus::Cancelled
+        )
+        .await
+        .unwrap());
+    assert!(reopened
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Cancelled,
+            AgentWorkflowStatus::Approved
+        )
+        .await
+        .is_err());
+    for id in ["root-attempt", "nested-attempt-a", "nested-attempt-b"] {
+        let mut attempt = reopened
+            .get_agent_workflow_attempt(id)
+            .await
+            .unwrap()
+            .unwrap();
+        attempt.status = AgentWorkflowAttemptStatus::Cancelled;
+        attempt.delegation_slot_yielded = false;
+        attempt.input_tokens = 10_000;
+        assert!(reopened
+            .update_agent_workflow_attempt(&attempt, AgentWorkflowAttemptStatus::Running)
+            .await
+            .unwrap());
+    }
+    assert!(reopened
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Cancelled,
+            AgentWorkflowStatus::Approved
+        )
+        .await
+        .unwrap());
+    assert!(reopened
+        .transition_agent_workflow_status(
+            "root",
+            AgentWorkflowStatus::Approved,
+            AgentWorkflowStatus::Running
+        )
+        .await
+        .unwrap());
+    assert_eq!(
+        reopened
+            .request_agent_workflow_cancel("nested")
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(!reopened
+        .agent_workflow_cancel_requested("root")
+        .await
+        .unwrap());
+    assert!(reopened
+        .agent_workflow_cancel_requested("nested")
+        .await
+        .unwrap());
+    assert!(!reopened
+        .agent_workflow_attempt_has_delegation_capacity("root-attempt")
+        .await
+        .unwrap());
+    let mut next = AgentWorkflowAttempt::queued(
+        "root-retry",
+        "root",
+        "root-step",
+        2,
+        "root-retry-request",
+        "local",
+        "{}",
+    )
+    .unwrap();
+    next.allow_delegation = true;
+    let AgentWorkflowAttemptStart::Started(next) = reopened
+        .try_create_started_agent_workflow_attempt(next)
+        .await
+        .unwrap()
+    else {
+        panic!("old nested attempts must not consume the retry budget");
+    };
+    assert!(reopened
+        .agent_workflow_attempt_has_delegation_capacity(&next.id)
+        .await
+        .unwrap());
+    reopened
+        .set_running_agent_workflow_attempt_provenance(&next.request_id, None, "root-child-frame")
+        .await
+        .unwrap();
+    let mut new_child =
+        AgentWorkflow::new("nested-retry", "p", "workspace", "New nested batch").unwrap();
+    new_child.frame_id = Some("root-child-frame".into());
+    new_child.root_workflow_id = "root".into();
+    new_child.parent_attempt_id = Some(next.id);
+    new_child.depth = 1;
+    new_child.root_limits_json = serde_json::to_string(&limits).unwrap();
+    reopened
+        .create_agent_workflow_plan(
+            &new_child,
+            &[nested_test_step(
+                "nested-retry-step",
+                "nested-retry",
+                false,
+                50,
+            )],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .get_agent_workflow("nested-retry")
+            .await
+            .unwrap()
+            .unwrap()
+            .execution_generation,
+        1
+    );
     reopened.pool.close().await;
     let _ = std::fs::remove_file(tmp);
 }
@@ -1777,6 +2492,57 @@ async fn raw_tools_prompt_and_depth_cannot_grant_nested_delegation() {
 }
 
 #[tokio::test]
+async fn recovery_claim_respects_live_leases_even_for_the_same_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("store.sqlite")).await.unwrap();
+    store.create_project("p", "Project", "").await.unwrap();
+    let run = RunRecord::new("transfer", "p", "local", "Harvest", "file_transfer");
+    store.create_run(&run).await.unwrap();
+    assert!(!store
+        .claim_expired_run_lifecycle("transfer", "owner", 60)
+        .await
+        .unwrap());
+    assert!(store
+        .activate_run_lifecycle("transfer", RunStatus::Running, "owner", 60)
+        .await
+        .unwrap());
+    for owner in ["owner", "another-owner"] {
+        assert!(!store
+            .claim_expired_run_lifecycle("transfer", owner, 60)
+            .await
+            .unwrap());
+    }
+    assert!(store
+        .renew_run_lifecycle("transfer", "owner", 60)
+        .await
+        .unwrap());
+    sqlx::query("UPDATE runs SET lifecycle_lease_until=1 WHERE id='transfer'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    assert!(store
+        .claim_expired_run_lifecycle("transfer", "recovery", 60)
+        .await
+        .unwrap());
+    assert!(!store
+        .claim_expired_run_lifecycle("transfer", "recovery", 60)
+        .await
+        .unwrap());
+    assert!(!store
+        .renew_run_lifecycle("transfer", "owner", 60)
+        .await
+        .unwrap());
+    assert!(store
+        .finish_active_run_owned("transfer", "recovery", RunStatus::Succeeded, Some(0))
+        .await
+        .unwrap());
+    assert!(!store
+        .claim_expired_run_lifecycle("transfer", "recovery", 60)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
 async fn last_user_message_session_ignores_later_assistant_activity() {
     let tmp = std::env::temp_dir().join(format!(
         "wisp_store_last_user_session_{}.sqlite",
@@ -1909,6 +2675,36 @@ async fn session_pages_are_stable_when_timestamps_match() {
         .map(|row| row.0.as_str())
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["c", "b", "a"]);
+    let _ = std::fs::remove_file(tmp);
+}
+
+#[tokio::test]
+async fn session_title_prefers_the_custom_title_over_the_first_user_turn() {
+    let tmp = std::env::temp_dir().join(format!("wisp_title_{}.sqlite", uuid::Uuid::new_v4()));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    assert_eq!(store.session_title("f").await.unwrap(), None);
+    assert_eq!(store.session_title("missing").await.unwrap(), None);
+
+    store
+        .append_message("f", 1, &Message::system("sys"))
+        .await
+        .unwrap();
+    store
+        .append_message("f", 2, &Message::user("Normalize the count matrix"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.session_title("f").await.unwrap().as_deref(),
+        Some("Normalize the count matrix")
+    );
+
+    store.rename_session("f", "p", "  QC notes ").await.unwrap();
+    assert_eq!(
+        store.session_title("f").await.unwrap().as_deref(),
+        Some("QC notes")
+    );
     let _ = std::fs::remove_file(tmp);
 }
 
@@ -2163,6 +2959,87 @@ async fn main_session_cannot_be_deleted_until_its_conversation_branches_are_dele
 
     store.pool.close().await;
     let _ = std::fs::remove_file(tmp);
+}
+
+#[tokio::test]
+async fn a_deleted_conversations_branches_and_subagents_are_listed_or_left_standalone() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("descendants.sqlite"))
+        .await
+        .unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    for id in ["main", "branch", "sub", "sub-branch", "unrelated"] {
+        store.create_frame(id, "p", "OPERON", "m").await.unwrap();
+        store
+            .append_message(id, 1, &Message::user(id))
+            .await
+            .unwrap();
+    }
+    store
+        .set_session_branch_point("branch", "main", 0, "before_user")
+        .await
+        .unwrap();
+    store
+        .set_session_dispatched_from("sub", "main")
+        .await
+        .unwrap();
+    store
+        .set_session_branch_point("sub-branch", "sub", 0, "before_user")
+        .await
+        .unwrap();
+
+    // Deepest first, so each one is deleted before the conversation it hangs from.
+    let descendants = store.list_session_descendants("main", "p").await.unwrap();
+    assert_eq!(
+        descendants,
+        vec![
+            SessionDescendant {
+                id: "sub-branch".into(),
+                subagent: false
+            },
+            SessionDescendant {
+                id: "branch".into(),
+                subagent: false
+            },
+            SessionDescendant {
+                id: "sub".into(),
+                subagent: true
+            },
+        ]
+    );
+    assert!(store
+        .list_session_descendants("unrelated", "p")
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Kept children stand alone; only direct links to the deleted parent go.
+    store.detach_session_children("main", "p").await.unwrap();
+    assert_eq!(store.session_branch_state("branch").await.unwrap(), None);
+    assert_eq!(store.session_dispatched_from("sub").await.unwrap(), None);
+    assert!(store
+        .session_has_conversation_branches("sub", "p")
+        .await
+        .unwrap());
+    store.delete_session("main", "p").await.unwrap();
+    assert!(store.frame_project_id("main").await.unwrap().is_none());
+    assert_eq!(
+        store.frame_project_id("branch").await.unwrap().as_deref(),
+        Some("p")
+    );
+
+    // Deleting a parent never leaves its subagent watch-only for a missing owner.
+    store
+        .set_session_dispatched_from("unrelated", "branch")
+        .await
+        .unwrap();
+    store.delete_session("branch", "p").await.unwrap();
+    assert_eq!(
+        store.session_dispatched_from("unrelated").await.unwrap(),
+        None
+    );
+    assert!(store.detach_session_children("branch", "p").await.is_err());
+    store.pool.close().await;
 }
 
 #[tokio::test]
@@ -3285,6 +4162,43 @@ async fn mcp_app_snapshots_roundtrip_without_rewriting_the_ui_event_log() {
 }
 
 #[tokio::test]
+async fn presentation_families_do_not_hide_each_other() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_presentations_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "P", "").await.unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    let app =
+        r#"{"kind":"ToolPresentation","presentation_kind":"mcp_app","payload":{"name":"Browser"}}"#;
+    let swarm = r#"{"kind":"ToolPresentation","presentation_kind":"agent_swarm","payload":{"phase":"completed"}}"#;
+    store.append_session_ui_event("f", 1, app).await.unwrap();
+    store.append_session_ui_event("f", 2, swarm).await.unwrap();
+    assert_eq!(
+        store
+            .load_latest_session_presentation("f", "mcp_app")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(app)
+    );
+    assert_eq!(
+        store
+            .load_latest_session_presentation("f", "agent_swarm")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(swarm)
+    );
+    assert!(store
+        .load_latest_session_presentation("f", "missing")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn session_ui_events_timed_roundtrip() {
     let tmp = std::env::temp_dir().join(format!(
         "wisp_ui_events_timed_{}.sqlite",
@@ -3794,6 +4708,7 @@ async fn delete_project_clears_later_child_tables_and_ignores_orphan_schedules()
         .unwrap());
 
     let gone_schedule = ScheduleRecord {
+        replace_previous_turn: false,
         id: "gone-sched".into(),
         project_id: "gone".into(),
         frame_id: Some("gone-main".into()),
@@ -3916,6 +4831,7 @@ async fn delete_project_clears_later_child_tables_and_ignores_orphan_schedules()
         .unwrap();
     store
         .create_schedule(&ScheduleRecord {
+            replace_previous_turn: false,
             id: "keep-sched".into(),
             project_id: "keep".into(),
             frame_id: Some("keep-main".into()),
@@ -4143,6 +5059,7 @@ async fn delete_session_clears_later_frame_tables() {
     store
         .create_schedule(&ScheduleRecord {
             id: "sched-f".into(),
+            replace_previous_turn: false,
             project_id: "p".into(),
             frame_id: Some("f".into()),
             name: "After session".into(),
@@ -4498,6 +5415,24 @@ async fn folder_crud_and_move() {
     store.rename_folder("d1", "p", "Analysis").await.unwrap();
     let folders = store.list_folders("p").await.unwrap();
     assert_eq!(folders[0].1, "Analysis");
+
+    // Reordering sticks, ignores other projects' ids, and new folders append.
+    store.create_folder("d2", "p", "Figures").await.unwrap();
+    let order =
+        |folders: Vec<(String, String, i64)>| folders.into_iter().map(|f| f.0).collect::<Vec<_>>();
+    assert_eq!(order(store.list_folders("p").await.unwrap()), ["d1", "d2"]);
+    store
+        .reorder_folders("p", &["d2".into(), "missing".into(), "d1".into()])
+        .await
+        .unwrap();
+    assert_eq!(order(store.list_folders("p").await.unwrap()), ["d2", "d1"]);
+    store.create_folder("d3", "p", "Tables").await.unwrap();
+    assert_eq!(
+        order(store.list_folders("p").await.unwrap()),
+        ["d2", "d1", "d3"]
+    );
+    store.delete_folder("d2", "p").await.unwrap();
+    store.delete_folder("d3", "p").await.unwrap();
 
     store.delete_folder("d1", "p").await.unwrap();
     assert!(store.list_folders("p").await.unwrap().is_empty());
@@ -4943,10 +5878,17 @@ async fn store_open_records_migrations_and_seeds_local_context() {
             RESEARCH_ARCHIVES_MIGRATION.to_string(),
             CONTEXT_EPOCHS_MIGRATION.to_string(),
             CONTEXT_EPOCH_IDENTITY_MIGRATION.to_string(),
+            SESSION_TIMERS_MIGRATION.to_string(),
             ACP_AGENT_SELECTION_MIGRATION.to_string(),
+            MANDATES_MIGRATION.to_string(),
+            RESEARCH_CHECKLIST_MIGRATION.to_string(),
             SESSION_SHELVED_MIGRATION.to_string(),
+            SERVER_TURNS_MIGRATION.to_string(),
             SESSION_FILE_OPERATIONS_MIGRATION.to_string(),
+            PROJECT_MEMOS_MIGRATION.to_string(),
             SCIENTIFIC_CYCLE_MIGRATION.to_string(),
+            PROJECT_STATUS_MIGRATION.to_string(),
+            AGENT_WORKFLOW_EXECUTION_ROUNDS_MIGRATION.to_string(),
         ]
     );
     let first_open_migrations = store.schema_migrations().await.unwrap();
@@ -5202,6 +6144,68 @@ fn auto_harvest_skip_and_lease_hold_are_pure_helpers() {
 }
 
 #[tokio::test]
+async fn backgrounded_run_gets_one_completion_notice_after_it_ends() {
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_run_background_{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    let store = Store::open(&tmp).await.unwrap();
+    store.create_project("p", "proj", "").await.unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    let mut owned = RunRecord::new("r", "p", "ssh:gpu", "Align", "ssh_direct");
+    owned.frame_id = Some("f".into());
+    owned.status = RunStatus::Running;
+    store.create_run(&owned).await.unwrap();
+    let mut orphan = RunRecord::new("orphan", "p", "local", "Orphan", "command");
+    orphan.status = RunStatus::Running;
+    store.create_run(&orphan).await.unwrap();
+    let mut done = RunRecord::new("done", "p", "local", "Done", "command");
+    done.frame_id = Some("f".into());
+    done.status = RunStatus::Succeeded;
+    store.create_run(&done).await.unwrap();
+
+    assert!(!store.run_background_requested("r").await.unwrap());
+    assert!(store.request_run_background("r").await.unwrap());
+    // Idempotent, and only for active Runs a conversation owns.
+    assert!(!store.request_run_background("r").await.unwrap());
+    assert!(!store.request_run_background("orphan").await.unwrap());
+    assert!(!store.request_run_background("done").await.unwrap());
+    assert!(!store.request_run_background("missing").await.unwrap());
+    assert!(store.run_background_requested("r").await.unwrap());
+    assert!(!store.run_background_requested("orphan").await.unwrap());
+    let summaries = store
+        .list_run_summaries_in_scope(&StateScope::mainline("p"))
+        .await
+        .unwrap();
+    let summary = |id: &str| summaries.iter().find(|run| run.id == id).unwrap();
+    assert!(summary("r").background_requested_at.is_some());
+    assert!(summary("done").background_requested_at.is_none());
+    assert_eq!(store.list_pending_background_runs().await.unwrap(), ["r"]);
+
+    // No notice while the Run is still executing.
+    assert!(!store.claim_run_background_notice("r").await.unwrap());
+    sqlx::query("UPDATE runs SET status='succeeded' WHERE id='r'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    assert!(store.claim_run_background_notice("r").await.unwrap());
+    assert!(!store.claim_run_background_notice("r").await.unwrap());
+    assert!(!store.claim_run_background_notice("done").await.unwrap());
+    assert!(store
+        .list_pending_background_runs()
+        .await
+        .unwrap()
+        .is_empty());
+    drop(store);
+
+    // Reopening (the schema-repair path) keeps both columns and their values.
+    let reopened = Store::open(&tmp).await.unwrap();
+    assert!(reopened.run_background_requested("r").await.unwrap());
+    assert!(!reopened.claim_run_background_notice("r").await.unwrap());
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[tokio::test]
 async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
     let tmp = std::env::temp_dir().join(format!(
         "wisp_run_harvest_state_{}.sqlite",
@@ -5211,6 +6215,8 @@ async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
     store.create_project("p", "proj", "").await.unwrap();
     let mut run = RunRecord::new("r", "p", "local", "Run", "command");
     run.status = RunStatus::Succeeded;
+    run.exit_code = Some(0);
+    run.last_poll_error = Some("remote artifact registration failed: interrupted download".into());
     store.create_run(&run).await.unwrap();
 
     assert!(store
@@ -5221,7 +6227,11 @@ async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
         .harvested_at
         .is_none());
     assert!(store.mark_run_harvested("r").await.unwrap());
-    assert!(store.get_run("r").await.unwrap().unwrap().is_harvested());
+    let harvested = store.get_run("r").await.unwrap().unwrap();
+    assert!(harvested.is_harvested());
+    assert!(harvested.last_poll_error.is_none());
+    assert_eq!(harvested.status, RunStatus::Succeeded);
+    assert_eq!(harvested.exit_code, Some(0));
     let harvested_at = store
         .get_run("r")
         .await
@@ -5239,6 +6249,13 @@ async fn run_harvest_state_is_recorded_once_and_survives_reopen() {
         reopened.get_run("r").await.unwrap().unwrap().harvested_at,
         Some(harvested_at)
     );
+    assert!(reopened
+        .get_run("r")
+        .await
+        .unwrap()
+        .unwrap()
+        .last_poll_error
+        .is_none());
     assert!(reopened
         .record_run_harvest_error("r", "remote artifact registration failed: boom")
         .await
@@ -8016,8 +9033,17 @@ async fn deleting_a_session_keeps_artifact_versions_owned_by_run_lineage() {
         .await
         .unwrap();
 
+    assert_eq!(
+        store.live_frame_project_id("f").await.unwrap().as_deref(),
+        Some("p")
+    );
     store.delete_session("f", "p").await.unwrap();
 
+    assert_eq!(
+        store.frame_project_id("f").await.unwrap().as_deref(),
+        Some("p")
+    );
+    assert!(store.live_frame_project_id("f").await.unwrap().is_none());
     assert!(store.get_run("run").await.unwrap().is_some());
     assert!(store
         .get_artifact_version(&version_id)
@@ -8031,6 +9057,25 @@ async fn deleting_a_session_keeps_artifact_versions_owned_by_run_lineage() {
     assert!(store.list_sessions("p").await.unwrap().is_empty());
 
     let _ = std::fs::remove_file(&tmp);
+}
+
+#[tokio::test]
+async fn live_frame_lookup_excludes_deleted_frames_without_lineage() {
+    let store = Store::open(std::path::Path::new(":memory:")).await.unwrap();
+    store.create_project("p", "Project", "").await.unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    assert_eq!(
+        store.live_frame_project_id("f").await.unwrap().as_deref(),
+        Some("p")
+    );
+    assert!(store
+        .live_frame_project_id("missing")
+        .await
+        .unwrap()
+        .is_none());
+    store.delete_session("f", "p").await.unwrap();
+    assert!(store.frame_project_id("f").await.unwrap().is_none());
+    assert!(store.live_frame_project_id("f").await.unwrap().is_none());
 }
 
 #[tokio::test]

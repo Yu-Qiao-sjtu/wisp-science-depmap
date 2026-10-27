@@ -30,9 +30,12 @@ initializing is also covered. Attempts have a per-window two-minute cooldown,
 including failed reload requests; failure to boot after a reload remains
 eligible for another attempt. Closing a window removes its health state.
 
-The log contains `webview health` once per minute per reporting window, plus
-`native stop requested` and `webview recovery requested` records with a window
-label and reload success/error. The heartbeat carries numeric diagnostics:
+The log contains `webview health` once per minute per reporting window, a
+`webview fault` warning the first time a document reports a renderer fault,
+a `webview invalid args` warning the first time the backend refuses a
+command's arguments, plus `native stop requested` and `webview recovery
+requested` records with a window label and reload success/error. The heartbeat carries bounded
+diagnostics:
 
 - maximum visible-page timer delay and longest observed long task;
 - cumulative long-task, script-error and unhandled-rejection counts;
@@ -40,11 +43,25 @@ label and reload success/error. The heartbeat carries numeric diagnostics:
 - current drag-overlay count;
 - live host media Blob URL count, encoded Blob bytes and mounted media-owner
   count (`mediaBlobUrls`, `mediaBlobBytes`, `mediaOwners`). These exclude MCP
-  iframe images, decoded bitmaps, JS/WASM heaps and GPU allocations.
+  iframe images, decoded bitmaps, JS/WASM heaps and GPU allocations;
+- the first renderer fault since the document loaded (`firstFault`): the first
+  line of a Rust panic (`panicked at ui/src/…:line:col: message`, recorded by
+  the WASM panic hook) or of a WebAssembly trap (`RuntimeError: …`), at most
+  160 characters from the renderer and 200 in the log. Later faults are not
+  recorded. A packaged app has no console, so this is where a trap that left a
+  panel busy forever becomes visible;
+- the first command whose arguments the backend could not deserialize
+  (`firstInvalidArgs`): only Tauri's ``invalid args `arg` for command `cmd` ``
+  prefix, never the serde detail after it, which can quote a value. It is
+  recorded for every invoke, including calls whose caller ignores the error,
+  so a renderer/backend argument-shape mismatch shows up in the log.
 
 Cumulative counters and maxima are bounded and reset with the document. No
-conversation text, plugin arguments, image data, URLs or error messages from
-JavaScript are included. Long-task metrics depend on browser support. A living
+conversation text, plugin arguments, image data, URLs or ordinary JavaScript
+error messages are included; only a Rust panic, a WebAssembly trap or a
+refused command and argument name is quoted, because those name code, not
+content. Long-task metrics depend on browser
+support. A living
 timer does **not** prove that clicks work: healthy heartbeats with a stuck UI
 call for checking overlays, pointer targeting and script failures. A native
 reload request being accepted also does not prove that navigation completed.
@@ -86,8 +103,14 @@ batch returns to 192 (64 source URLs plus 128 downscaled thumbnail URLs).
 The mock workload combines a paginated long transcript, two simultaneous
 session streams, and two App instances with 96 local thumbnail cards each.
 One App remains parked while the other is visible. The test clicks a candidate,
-Stop, tab close and New session, and checks numeric diagnostics. It also guards
-against a model picker overflowing over Stop in a narrow chat split.
+Stop, tab close and New session, and checks numeric diagnostics. Each App must
+finish rendering its thumbnails before it is clicked, and host responsiveness
+is bounded by the page's own clock: the stream's 50 ms timer must keep firing,
+and no main-thread task or timer lag may exceed three seconds while the
+controls are used. The Playwright clicks themselves only have to complete within ten
+seconds, so a busy CI runner cannot fail the test unless the host stalls. It
+also guards against a model picker overflowing over Stop in a narrow chat
+split.
 
 Run the optional native smoke from the repository root:
 

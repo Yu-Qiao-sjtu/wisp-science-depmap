@@ -30,6 +30,9 @@ extern "C" {
     pub(crate) async fn invoke(cmd: &str, args: JsValue) -> JsValue;
     pub(crate) fn start_ui_health();
     pub(crate) fn report_ui_health();
+    /// Remember the first renderer fault for the heartbeat (first line, bounded).
+    #[wasm_bindgen(js_name = record_ui_fault)]
+    pub(crate) fn record_ui_fault(text: &str);
     #[wasm_bindgen(catch, js_name = invoke_strict)]
     pub(crate) async fn invoke_checked(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = invoke_timeout)]
@@ -96,8 +99,8 @@ extern "C" {
     pub(crate) async fn upload_pasted_images(event: JsValue) -> JsValue;
     #[wasm_bindgen(js_name = native_drop_in_composer)]
     pub(crate) fn native_drop_in_composer(payload: JsValue) -> bool;
-    #[wasm_bindgen(js_name = native_drop_remote_target)]
-    pub(crate) fn native_drop_remote_target(payload: JsValue) -> JsValue;
+    #[wasm_bindgen(js_name = native_drop_files_target)]
+    pub(crate) fn native_drop_files_target(payload: JsValue) -> JsValue;
     #[wasm_bindgen(js_name = upload_input_files)]
     pub(crate) async fn upload_input_files(input_id: &str) -> JsValue;
     #[wasm_bindgen(js_name = preview_selection)]

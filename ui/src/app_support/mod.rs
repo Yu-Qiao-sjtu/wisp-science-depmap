@@ -4,7 +4,7 @@ use super::{
 };
 use crate::bindings::{
     attach_cropped_region, crop_region_to_upload, invoke, invoke_checked, is_mac, mount_preview,
-    native_drop_remote_target, open_external_url, open_tutorials, schedule_highlight,
+    native_drop_files_target, open_external_url, open_tutorials, schedule_highlight,
     schedule_run_output_follow, set_highlighted_code, upload_files, upload_input_files,
     upload_pasted_images,
 };
@@ -19,8 +19,8 @@ use crate::text::{
     normalize_path, opens_in_system_browser, parent_path, parse_csv_line, parse_notebook,
     pretty_json, preview_code_lang, provider_defaults, provider_value, same_endpoint,
     sanitize_composer_text, sanitized_composer_offset, source_execution, source_selection,
-    split_row, tool_card_label, tool_lang, unique_dom_id, user_message_presentation, NbOutput,
-    Notebook, DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL,
+    split_row, tool_card_label, tool_lang, unique_dom_id, user_message_presentation, BriefSender,
+    NbOutput, Notebook, DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL,
 };
 use leptos::{ev, window_event_listener, *};
 use serde_wasm_bindgen::to_value;

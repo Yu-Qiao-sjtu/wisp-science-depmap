@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   depmap-contract-pr-gate:
     name: DepMap contract PR gate (offline)
@@ -77,8 +84,12 @@ jobs:
         working-directory: ui-tests
       - run: npx playwright test --config playwright.website.config.ts
         working-directory: ui-tests
+  changes:
+    uses: ./.github/workflows/ci-changes.yml
 
   release-notes-helper:
+    needs: changes
+    if: needs.changes.outputs.release_notes == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,6 +97,8 @@ jobs:
         run: bash scripts/github_release_notes.sh --self-test
 
   headless-agent-eval:
+    needs: changes
+    if: needs.changes.outputs.headless == 'true'
     name: Headless agent eval (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -120,14 +133,16 @@ jobs:
       - name: Run MCP process-tree shutdown regression
         run: cargo test -p wisp-mcp --test process_tree_shutdown
 
+      # An ACP agent starts helpers of its own (Codex keeps a node_repl per
+      # tool session). Stopping the agent must stop them on every OS (#1477).
+      - name: Run ACP agent process-tree regression
+        run: cargo test -p wisp-acp --test process
+
       - name: Test repository build launcher
         run: cargo test --locked -p wisp-dev
 
-      - name: Test incremental frontend asset staging
-        run: node --test ui/build-fast.test.mjs
-
       - name: Run project storage startup and migration regressions
-        run: cargo test -p wisp-store project_storage::tests
+        run: cargo test -p wisp-store -- project_storage::tests upgrade_backup::tests
 
       # Interpreters are often launchers: Windows Rscript.exe re-launches
       # bin\x64\Rscript.exe through cmd.exe. Stopping a runtime must reclaim
@@ -157,6 +172,7 @@ jobs:
 
       - name: Upload headless eval artifacts
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: headless-agent-eval-${{ matrix.os }}
@@ -164,6 +180,8 @@ jobs:
           if-no-files-found: error
 
   windows-native-input:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     name: Windows native input reentrancy
     runs-on: windows-latest
     timeout-minutes: 35
@@ -195,6 +213,8 @@ jobs:
           }
 
   macos-native-redraw:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     name: macOS native redraw reentrancy
     runs-on: macos-latest
     timeout-minutes: 35
@@ -221,6 +241,8 @@ jobs:
           done
 
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     env:
       WISP_CATALOG_OFFLINE: "1"
@@ -235,13 +257,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
-          targets: wasm32-unknown-unknown
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
-            ui -> target
           cache-on-failure: true
           shared-key: rust-${{ matrix.toolchain }}
 
@@ -297,12 +315,57 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace
 
+  ui-check:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [stable, 1.90.0]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: wasm32-unknown-unknown
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ui -> target
+          cache-on-failure: true
+          shared-key: ui-${{ matrix.toolchain }}
       - name: cargo check (wasm UI crate)
         run: cargo check --target wasm32-unknown-unknown
         working-directory: ui
 
-  ui-e2e:
+  frontend-assets:
+    needs: changes
+    if: needs.changes.outputs.frontend_assets == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test incremental frontend asset staging
+        run: node --test ui/build-fast.test.mjs
+
+  # The suite (1,100 tests) is fully parallel (see ui-tests/playwright.config.ts)
+  # and split across runners: one runner with two workers needed ~40 minutes,
+  # four shards of four workers each finish in well under ten. A hang must fail
+  # fast instead of holding a runner for the six-hour default.
+  ui-e2e-shard:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    name: ui-e2e (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -310,10 +373,13 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # Every shard builds the same wasm crate, so they share one cache entry;
+      # the first shard to finish saves it and the others only restore.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ui -> target
           cache-on-failure: true
+          shared-key: ui-e2e
 
       - name: Cache Trunk
         uses: actions/cache@v4
@@ -345,4 +411,40 @@ jobs:
 
       - name: Playwright E2E
         working-directory: ui-tests
-        run: npx playwright test
+        run: npx playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+      # Failure diagnostics: error-context.md, screenshots and traces from
+      # test-results/, plus the HTML report when a reporter writes one. One
+      # artifact per shard so the four runners do not collide.
+      - name: Upload Playwright results
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-${{ matrix.shard }}
+          path: |
+            ui-tests/test-results/
+            ui-tests/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # One stable "ui-e2e" check over the shards for branch rules and PR monitors:
+  # green when every shard passed, or when the suite was skipped because no UI
+  # file changed; red when any shard failed or was cancelled.
+  ui-e2e:
+    needs: [changes, ui-e2e-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check shard results
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          SHARDS: ${{ needs.ui-e2e-shard.result }}
+        run: |
+          echo "changes: ${CHANGES}; ui-e2e shards: ${SHARDS}"
+          [ "${CHANGES}" = success ] || exit 1
+          case "${SHARDS}" in
+            success|skipped) exit 0 ;;
+            *) exit 1 ;;
+          esac

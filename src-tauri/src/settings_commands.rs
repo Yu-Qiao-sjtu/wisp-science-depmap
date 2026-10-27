@@ -164,7 +164,12 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
         .flatten()
         .unwrap_or_default();
     let notifications_enabled = super::load_notifications_enabled(&state.store).await;
+    let notification_sound_enabled = crate::notification_sound::load_enabled(&state.store).await;
+    let notification_sound = crate::notification_sound::effective_choice(
+        &crate::notification_sound::load_choice(&state.store).await,
+    );
     let auto_compact = super::load_auto_compact_enabled(&state.store).await;
+    let auto_compact_percent = super::load_auto_compact_percent(&state.store).await as u64;
     let semantic_compact_on_model_switch =
         super::load_semantic_compact_on_model_switch(&state.store).await;
     let semantic_compact_idle_hours = super::load_semantic_compact_idle_hours(&state.store).await;
@@ -173,6 +178,14 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
     let follow_up_questions = state
         .store
         .get_setting("follow_up_questions")
+        .await
+        .ok()
+        .flatten()
+        .map(|value| value == "true")
+        .unwrap_or(true);
+    let show_tips = state
+        .store
+        .get_setting("show_tips")
         .await
         .ok()
         .flatten()
@@ -197,11 +210,13 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
         workspace_dir,
         max_iter,
         auto_compact,
+        auto_compact_percent,
         semantic_compact_on_model_switch,
         semantic_compact_idle_hours,
         auto_continue,
         auto_continue_limit: auto_continue_limit as u64,
         follow_up_questions,
+        show_tips,
         resume_last_session,
         decentralized_project_storage: state
             .store
@@ -225,6 +240,8 @@ pub(super) async fn get_settings(state: State<'_, AppState>) -> Result<Settings,
         pet_enabled,
         pet_directory,
         notifications_enabled,
+        notification_sound_enabled,
+        notification_sound,
     })
 }
 
@@ -284,17 +301,9 @@ pub(super) async fn set_settings(
     }
     let sync_relay_url = settings.sync_relay_url.trim();
     if !sync_relay_url.is_empty() {
-        let url = url::Url::parse(sync_relay_url)
-            .map_err(|_| "Sync relay URL is invalid.".to_string())?;
-        let local_http = url.scheme() == "http"
-            && url
-                .host_str()
-                .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
-        if url.scheme() != "https" && !local_http {
-            return Err(
-                "Sync relay URL must use HTTPS (HTTP is allowed only for localhost).".into(),
-            );
-        }
+        // The same rule the sync transport applies: HTTPS, or HTTP to this
+        // computer or a private network address.
+        wisp_sync::relay_base(sync_relay_url).map_err(|error| error.to_string())?;
     }
     let sync_folder = settings.sync_folder.trim();
     if !sync_folder.is_empty() && !Path::new(sync_folder).is_absolute() {
@@ -314,6 +323,7 @@ pub(super) async fn set_settings(
         }
         load_pet_asset(Path::new(pet_directory))?;
     }
+    crate::notification_sound::normalize_choice(&settings.notification_sound)?;
     tracing::info!(
         target: "wisp",
         provider = %provider,
@@ -395,6 +405,12 @@ pub(super) async fn set_settings(
         )
         .await
         .map_err(|e| e.to_string())?;
+    crate::notification_sound::save(
+        &state.store,
+        settings.notification_sound_enabled,
+        &settings.notification_sound,
+    )
+    .await?;
     state
         .store
         .set_setting("max_iter", &settings.max_iter.to_string())
@@ -403,6 +419,14 @@ pub(super) async fn set_settings(
     state
         .store
         .set_setting("auto_compact", &settings.auto_compact.to_string())
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .store
+        .set_setting(
+            "auto_compact_percent",
+            &super::clamp_auto_compact_percent(settings.auto_compact_percent).to_string(),
+        )
         .await
         .map_err(|e| e.to_string())?;
     state
@@ -440,6 +464,11 @@ pub(super) async fn set_settings(
             "follow_up_questions",
             &settings.follow_up_questions.to_string(),
         )
+        .await
+        .map_err(|e| e.to_string())?;
+    state
+        .store
+        .set_setting("show_tips", &settings.show_tips.to_string())
         .await
         .map_err(|e| e.to_string())?;
     state
@@ -721,6 +750,7 @@ pub(super) async fn validate_settings(
     key: Option<String>,
     profile_id: Option<String>,
     use_for_image_generation: Option<bool>,
+    proxy_url: Option<String>,
 ) -> Result<String, String> {
     let provider_name = normalized_provider(&settings.provider);
     let stored_key = match profile_id
@@ -737,7 +767,7 @@ pub(super) async fn validate_settings(
         }
     };
     let api_key = effective_api_key(key, stored_key);
-    let cfg = build_provider_config(
+    let mut cfg = build_provider_config(
         &settings.provider,
         &settings.api_url,
         &api_key,
@@ -752,7 +782,16 @@ pub(super) async fn validate_settings(
         None,
     )?;
     // Validate through the current Network policy, not a stale model form's
-    // compatibility proxy_url field.
+    // compatibility proxy_url field. A form's unsaved endpoint route
+    // (`proxy_url`) is tried as it would apply after saving.
+    if let Some(proxy_url) = proxy_url {
+        let proxy_url = crate::network::normalize_proxy("Model API proxy", &proxy_url)?;
+        if crate::network::subscription_kind(&provider_name).is_none() {
+            let route =
+                crate::network::resolve_route(&proxy_url, &crate::llm_proxy().unwrap_or_default());
+            cfg.proxy = (!route.is_empty()).then_some(route);
+        }
+    }
 
     tracing::info!(
         target: "wisp",

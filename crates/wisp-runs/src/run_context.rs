@@ -35,8 +35,9 @@ pub use tools::{
     MonitorRunTool, RemoveRemoteFilesTool, RunInContextTool,
 };
 pub use transfer::{
-    load_trust_edges, persist_transfer_handle, revoke_trust_edge, submit_local_uploads_to_context,
-    RevokeTrustResponse, SshTrustEdge, TransferHandle, UploadToContextItem,
+    join_remote_upload_destination, load_trust_edges, persist_transfer_handle, revoke_trust_edge,
+    submit_local_uploads_to_context, RevokeTrustResponse, SshTrustEdge, TransferHandle,
+    UploadToContextItem,
 };
 pub use transfer::{ConfigureSshTrustTool, TransferBetweenContextsTool};
 
@@ -97,6 +98,10 @@ pub struct RunPreflightSpec {
     pub syntax_paths: Vec<String>,
     #[serde(default)]
     pub allow_warnings: bool,
+    /// Optional interpreter handshake budget in seconds. When absent the budget
+    /// scales with the language and the number of declared packages.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 impl RunPreflightReport {
@@ -595,6 +600,9 @@ struct ActiveRun {
 pub struct RunManager {
     runner: Arc<dyn RunCommandRunner>,
     active: Arc<Mutex<HashMap<String, ActiveRun>>>,
+    // Serializes upload admission and retains targets until aborted/completed
+    // lifecycle tasks have actually drained. Clones share the same reservations.
+    upload_targets: Arc<Mutex<HashMap<String, transfer::UploadTarget>>>,
     owner_id: String,
     reconciler_started: Arc<AtomicBool>,
     last_retention_sweep: Arc<Mutex<Option<Instant>>>,
@@ -641,6 +649,7 @@ impl RunManager {
         Self {
             runner,
             active: Arc::new(Mutex::new(HashMap::new())),
+            upload_targets: Arc::new(Mutex::new(HashMap::new())),
             owner_id: uuid::Uuid::new_v4().to_string(),
             reconciler_started: Arc::new(AtomicBool::new(false)),
             last_retention_sweep: Arc::new(Mutex::new(None)),
@@ -782,7 +791,12 @@ impl RunManager {
             Some(root.clone()),
             format!("{language} interpreter/package preflight"),
         )?;
-        match self.runner.run(handshake, Duration::from_secs(5)).await {
+        let handshake_budget =
+            preflight_handshake_timeout(&language, &spec.packages, spec.timeout_secs);
+        match self
+            .run_handshake_with_cold_start_retry(handshake, handshake_budget)
+            .await
+        {
             Ok(output) if output.exit_code == 0 => {
                 let version = output.stdout.trim();
                 report.push(
@@ -847,7 +861,7 @@ impl RunManager {
                     Some(root),
                     format!("{language} syntax preflight"),
                 )?;
-                match self.runner.run(syntax, Duration::from_secs(5)).await {
+                match self.runner.run(syntax, PREFLIGHT_SYNTAX_TIMEOUT).await {
                     Ok(output) if output.exit_code == 0 => report.push(
                         "syntax",
                         RunPreflightStatus::Passed,
@@ -873,6 +887,33 @@ impl RunManager {
         Ok(report)
     }
 
+    /// Runs the interpreter/package handshake, retrying once with a doubled
+    /// budget when the first attempt times out. A cold library attach (R with
+    /// several Bioconductor packages on a fresh session) is the usual cause,
+    /// and the second attempt benefits from the warmed file cache, so a single
+    /// retry separates "slow start" from "broken interpreter" without making
+    /// every preflight slow.
+    async fn run_handshake_with_cold_start_retry(
+        &self,
+        handshake: RunCommand,
+        budget: Duration,
+    ) -> Result<RunCommandOutput, String> {
+        match self.runner.run(handshake.clone(), budget).await {
+            Err(error) if is_runner_timeout(&error) => {
+                let retry_budget = budget * 2;
+                match self.runner.run(handshake, retry_budget).await {
+                    Err(error) if is_runner_timeout(&error) => Err(format!(
+                        "cold-start handshake timed out after {}s and again after {}s; the interpreter and declared packages could not be verified in time. Set preflight.timeout_secs higher or warm the library once before submitting",
+                        budget.as_secs(),
+                        retry_budget.as_secs()
+                    )),
+                    other => other,
+                }
+            }
+            other => other,
+        }
+    }
+
     pub async fn download_ssh_file(
         &self,
         store: &wisp_store::Store,
@@ -882,6 +923,69 @@ impl RunManager {
         remote_path: &str,
         destination: &std::path::Path,
     ) -> Result<String, String> {
+        let (run_id, task) = self
+            .start_ssh_file_download(
+                store,
+                project_id,
+                frame_id,
+                context,
+                remote_path,
+                destination,
+                None,
+            )
+            .await?;
+        let result = task.await;
+        self.active.lock().await.remove(&run_id);
+        match result {
+            Ok(result) => result.map(|_| run_id),
+            Err(error) if error.is_cancelled() => Err("download cancelled".into()),
+            Err(error) => Err(format!("download task failed: {error}")),
+        }
+    }
+
+    /// Submit a user-chosen export without holding a UI request for the transfer.
+    /// Download privately and replace only an unchanged destination on success.
+    pub async fn submit_ssh_file_download(
+        &self,
+        store: &wisp_store::Store,
+        project_id: &str,
+        frame_id: Option<&str>,
+        context: &wisp_store::ExecutionContext,
+        remote_path: &str,
+        destination: &std::path::Path,
+    ) -> Result<String, String> {
+        let target = ChosenDownloadTarget::new(destination)?;
+        let (run_id, task) = self
+            .start_ssh_file_download(
+                store,
+                project_id,
+                frame_id,
+                context,
+                remote_path,
+                destination,
+                Some(target),
+            )
+            .await?;
+        let active = self.active.clone();
+        let cleanup_id = run_id.clone();
+        tokio::spawn(async move {
+            let _ = task.await;
+            active.lock().await.remove(&cleanup_id);
+        });
+        Ok(run_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn start_ssh_file_download(
+        &self,
+        store: &wisp_store::Store,
+        project_id: &str,
+        frame_id: Option<&str>,
+        context: &wisp_store::ExecutionContext,
+        remote_path: &str,
+        destination: &std::path::Path,
+        target: Option<ChosenDownloadTarget>,
+    ) -> Result<(String, tokio::task::JoinHandle<Result<(), String>>), String> {
         if remote_path.is_empty() || remote_path.contains(['\0', '\n', '\r']) {
             return Err("Invalid remote file path".into());
         }
@@ -915,7 +1019,12 @@ impl RunManager {
             "file_transfer",
         );
         run.frame_id = frame_id.map(Into::into);
-        run.command = Some(format!("download {remote_path}"));
+        run.command = Some(if let Some(target) = &target {
+            format!("download {remote_path} -> {}", target.destination.display())
+        } else {
+            format!("download {remote_path}")
+        });
+        run.timeout_secs = Some(4 * 60 * 60);
         run.progress_json = serde_json::to_string(&initial_progress).map_err(|e| e.to_string())?;
         store.create_run(&run).await.map_err(|e| e.to_string())?;
         if !store
@@ -932,7 +1041,11 @@ impl RunManager {
         }
         let mut args = connection.scp_option_args()?;
         args.push(format!("{}:{remote_path}", connection.target()?));
-        args.push(destination.to_string_lossy().into_owned());
+        let copy_destination = target
+            .as_ref()
+            .map(|target| target.temporary.as_path())
+            .unwrap_or(destination);
+        args.push(copy_destination.to_string_lossy().into_owned());
         let command = RunCommand {
             context_id: context.id.clone(),
             program: "scp".into(),
@@ -946,7 +1059,7 @@ impl RunManager {
         let task_store = store.clone();
         let owner_id = self.owner_id.clone();
         let task_run_id = run_id.clone();
-        let destination = destination.to_path_buf();
+        let destination = copy_destination.to_path_buf();
         let task = tokio::spawn(async move {
             download_lifecycle(
                 &task_store,
@@ -958,6 +1071,7 @@ impl RunManager {
                 size,
                 file_name,
                 started,
+                target,
             )
             .await
         });
@@ -966,13 +1080,7 @@ impl RunManager {
             .lock()
             .await
             .insert(run_id.clone(), ActiveRun { abort });
-        let result = task.await;
-        self.active.lock().await.remove(&run_id);
-        match result {
-            Ok(result) => result.map(|_| run_id),
-            Err(error) if error.is_cancelled() => Err("download cancelled".into()),
-            Err(error) => Err(format!("download task failed: {error}")),
-        }
+        Ok((run_id, task))
     }
 
     pub async fn recover(&self, store: &wisp_store::Store) -> Result<u64, String> {
@@ -1123,8 +1231,10 @@ impl RunManager {
                     }
                 })
                 .unwrap_or(ACTIVE_LEASE_SECS);
+            // A live inline harvest may not appear in `active`. Recovery must
+            // respect its lease even when it belongs to this same manager.
             let claimed = store
-                .claim_run_lifecycle(&run.id, &self.owner_id, lease_secs)
+                .claim_expired_run_lifecycle(&run.id, &self.owner_id, lease_secs)
                 .await
                 .map_err(|e| e.to_string())?;
             if !claimed {
@@ -1611,6 +1721,22 @@ impl RunManager {
         .await
     }
 
+    /// One read-only look at an SSH Run on its server, running or finished:
+    /// its live processes and the files written since it started.
+    pub async fn inspect_run_server(
+        &self,
+        store: &wisp_store::Store,
+        run: &wisp_store::RunRecord,
+    ) -> Result<String, String> {
+        if run.cleaned_at.is_some() {
+            return Err("Run workspace was already cleaned".into());
+        }
+        let remote = remote_run_from_record(store, run)
+            .await?
+            .ok_or_else(|| "Run has no server workspace".to_string())?;
+        harvest_remote::inspect_run_server(self.runner.as_ref(), &remote).await
+    }
+
     /// Download the user's explicit selection from a finished Run's workspace
     /// and register it (files individually, directories as one archive each).
     pub async fn download_run_files(
@@ -1933,6 +2059,93 @@ async fn remote_file_size(
         .map_err(|_| "SSH download size response was invalid".to_string())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct DownloadFingerprint {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
+fn download_fingerprint(path: &Path) -> Result<Option<DownloadFingerprint>, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return Err("Download destination must be a regular file or a new filename".into());
+    }
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Ok(Some(DownloadFingerprint {
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        identity: (metadata.dev(), metadata.ino()),
+    }))
+}
+
+struct ChosenDownloadTarget {
+    directory: PathBuf,
+    temporary: PathBuf,
+    destination: PathBuf,
+    before: Option<DownloadFingerprint>,
+}
+impl ChosenDownloadTarget {
+    fn new(destination: &Path) -> Result<Self, String> {
+        if !destination.is_absolute() {
+            return Err("Download destination must be absolute".into());
+        }
+        let name = destination
+            .file_name()
+            .ok_or("Choose a download filename")?;
+        let parent = destination
+            .parent()
+            .ok_or("Choose a download directory")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let destination = parent.join(name);
+        let before = download_fingerprint(&destination)?;
+        let directory = parent.join(format!(".wisp-download-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(error) =
+                std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            {
+                let _ = std::fs::remove_dir(&directory);
+                return Err(error.to_string());
+            }
+        }
+        Ok(Self {
+            temporary: directory.join("payload"),
+            directory,
+            destination,
+            before,
+        })
+    }
+    fn finish(&self, expected_bytes: u64) -> Result<(), String> {
+        let downloaded =
+            download_fingerprint(&self.temporary)?.ok_or("Downloaded file is missing")?;
+        if downloaded.length != expected_bytes {
+            return Err("Downloaded file size changed; destination was not replaced".into());
+        }
+        if download_fingerprint(&self.destination)? != self.before {
+            return Err(
+                "Download destination changed during transfer and was not overwritten".into(),
+            );
+        }
+        std::fs::rename(&self.temporary, &self.destination).map_err(|error| error.to_string())
+    }
+}
+impl Drop for ChosenDownloadTarget {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
 async fn download_lifecycle(
     store: &wisp_store::Store,
     owner_id: &str,
@@ -1943,6 +2156,7 @@ async fn download_lifecycle(
     total_bytes: u64,
     file_name: String,
     started: Instant,
+    target: Option<ChosenDownloadTarget>,
 ) -> Result<(), String> {
     let transfer = runner.run(command, Duration::from_secs(4 * 60 * 60));
     tokio::pin!(transfer);
@@ -1972,6 +2186,17 @@ async fn download_lifecycle(
                 }
             }
         }
+    };
+    let output = match output {
+        Ok(output) if output.exit_code == 0 => match target
+            .as_ref()
+            .map(|target| target.finish(total_bytes))
+            .transpose()
+        {
+            Ok(_) => Ok(output),
+            Err(error) => Err(error),
+        },
+        other => other,
     };
     let (status, exit_code, stdout, stderr, result) = match output {
         Ok(output) if output.exit_code == 0 => (
@@ -2122,6 +2347,41 @@ fn preflight_interpreter(
         _ => return Err(format!("unsupported preflight language: {language}")),
     };
     Ok(context_json_string(context, keys).unwrap_or_else(|| fallback.into()))
+}
+
+/// Parsing a handful of files is quick, but Rscript/python startup on a busy
+/// machine is not instantaneous; leave headroom beyond the old 5s literal.
+const PREFLIGHT_SYNTAX_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Explicit `preflight.timeout_secs` values are clamped into this range.
+const PREFLIGHT_TIMEOUT_RANGE: std::ops::RangeInclusive<u64> = 1..=600;
+
+/// Budget for the interpreter/package handshake. R attaches every declared
+/// package, and a cold Bioconductor attach routinely takes several seconds per
+/// package, so R scales faster than Python, whose handshake only resolves import
+/// specs. Both are capped so a hung interpreter still fails in bounded time.
+fn preflight_handshake_timeout(
+    language: &str,
+    packages: &[String],
+    override_secs: Option<u64>,
+) -> Duration {
+    if let Some(secs) = override_secs {
+        return Duration::from_secs(secs.clamp(
+            *PREFLIGHT_TIMEOUT_RANGE.start(),
+            *PREFLIGHT_TIMEOUT_RANGE.end(),
+        ));
+    }
+    let (base, per_package, cap) = if language == "r" {
+        (15u64, 10u64, 120u64)
+    } else {
+        (10u64, 2u64, 60u64)
+    };
+    let scaled = base.saturating_add(per_package.saturating_mul(packages.len() as u64));
+    Duration::from_secs(scaled.min(cap))
+}
+
+fn is_runner_timeout(error: &str) -> bool {
+    error.starts_with("run_in_context timed out after ")
 }
 
 fn preflight_handshake_args(language: &str, packages: &[String]) -> Vec<String> {
@@ -3583,7 +3843,14 @@ async fn run_with_lifecycle_lease(
     let mut updates_open = true;
     loop {
         tokio::select! {
-            output = &mut operation => return output,
+            output = &mut operation => {
+                // The lease can lapse while the store or the machine was
+                // stalled; the caller's terminal write still needs it.
+                let _ = store
+                    .claim_run_lifecycle(run_id, owner_id, ACTIVE_LEASE_SECS)
+                    .await;
+                return output;
+            }
             update = updates_rx.recv(), if updates_open => {
                 match update {
                     Some(update) => {
@@ -3600,43 +3867,52 @@ async fn run_with_lifecycle_lease(
             _ = output_flush.tick(), if output_dirty => {
                 let stdout = String::from_utf8_lossy(&stdout_tail);
                 let stderr = String::from_utf8_lossy(&stderr_tail);
-                let owned = store
-                    .record_run_poll_owned(
-                        run_id,
-                        owner_id,
-                        (!stdout.is_empty()).then_some(stdout.as_ref()),
-                        (!stderr.is_empty()).then_some(stderr.as_ref()),
-                        None,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if !owned {
-                    return Err("Run lifecycle lease was lost".into());
-                }
-                output_dirty = false;
+                // Stays dirty until a write lands; the heartbeat below decides
+                // whether the lease is really gone.
+                output_dirty = !matches!(
+                    store
+                        .record_run_poll_owned(
+                            run_id,
+                            owner_id,
+                            (!stdout.is_empty()).then_some(stdout.as_ref()),
+                            (!stderr.is_empty()).then_some(stderr.as_ref()),
+                            None,
+                        )
+                        .await,
+                    Ok(true)
+                );
             }
             _ = heartbeat.tick() => {
-                let status = store
-                    .get_run(run_id)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .map(|run| run.status);
-                if status == Some(wisp_store::RunStatus::Cancelling) {
-                    return Err("run_in_context cancelled".into());
+                // Only a lease another owner took, or a Run that is no longer
+                // active, stops the process. A store that cannot be reached
+                // or a lease that merely lapsed must not kill a transfer that
+                // is still copying.
+                let beat = async {
+                    let held = store
+                        .renew_run_lifecycle(run_id, owner_id, ACTIVE_LEASE_SECS)
+                        .await?
+                        || store
+                            .claim_run_lifecycle(run_id, owner_id, ACTIVE_LEASE_SECS)
+                            .await?;
+                    if !held {
+                        return Ok(Some("Run lifecycle lease was lost"));
+                    }
+                    let run = store.get_run(run_id).await?;
+                    if run.is_some_and(|run| run.status == wisp_store::RunStatus::Cancelling) {
+                        return Ok(Some("run_in_context cancelled"));
+                    }
+                    store
+                        .record_run_poll_owned(run_id, owner_id, None, None, None)
+                        .await?;
+                    anyhow::Ok(None)
                 }
-                let owned = store
-                    .renew_run_lifecycle(run_id, owner_id, ACTIVE_LEASE_SECS)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if !owned {
-                    return Err("Run lifecycle lease was lost".into());
-                }
-                let owned = store
-                    .record_run_poll_owned(run_id, owner_id, None, None, None)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if !owned {
-                    return Err("Run lifecycle lease was lost".into());
+                .await;
+                match beat {
+                    Ok(Some(stop)) => return Err(stop.into()),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(run_id, "Run heartbeat could not reach the store: {error}");
+                    }
                 }
             }
         }

@@ -5,11 +5,17 @@ const suffixes = {
   "macos-arm64-dmg": "aarch64.dmg", "macos-x64-dmg": "x64.dmg",
   "linux-x64-deb": "amd64.deb", "linux-arm64-deb": "arm64.deb",
   "linux-x64-appimage": "amd64.AppImage", "linux-arm64-appimage": "aarch64.AppImage",
+  "android-universal-apk": "android.apk",
+  "macos-arm64-swiftui": "aarch64.dmg", "macos-x64-swiftui": "x86_64.dmg",
+  "windows-x64-winui-framework": "x64-framework-dependent-setup.exe",
+  "windows-x64-winui-self-contained": "x64-self-contained-setup.exe",
 };
 const manifest = {
   schema: 1, tag: "v1.12.0",
   packages: Object.entries(suffixes).map(([id, suffix]) => {
-    const name = `wisp-depmap_1.12.0_${suffix}`;
+    const prefix = id.includes("swiftui") ? "Wisp-Science-SwiftUI"
+      : id.includes("winui") ? "Wisp-Science-WinUI-Preview" : "wisp-depmap";
+    const name = `${prefix}_1.12.0_${suffix}`;
     return { id, name, sha256: "a".repeat(64), size: 24000000, key: `releases/v1.12.0/${"a".repeat(64)}/${name}` };
   }),
 };
@@ -30,11 +36,12 @@ test("homepage download stays on the homepage and tutorials return to its downlo
   await expect(page.locator(".nav-cta .btn-primary")).toHaveAttribute("href", /\.\.\/index\.html.*#download/);
 });
 
-test("all eight packages resolve exact versioned mirror and GitHub links", async ({ page }) => {
+test("all standard, mobile and native packages resolve exact versioned mirror and GitHub links", async ({ page }) => {
   await page.goto("/index.html#download");
   await expect(page.locator("#release-status")).toContainText("v1.12.0");
   for (const asset of manifest.packages) {
-    const [os, arch, format] = asset.id.split("-");
+    const [os, arch, ...parts] = asset.id.split("-");
+    const format = parts.join("-");
     await page.locator("#download-os").selectOption(os);
     await page.locator("#download-arch").selectOption(arch);
     await page.locator("#download-format").selectOption(format);
@@ -55,7 +62,7 @@ test("Mac never guesses architecture, and switching languages preserves selectio
   await expect(page.locator("#download-primary")).not.toHaveAttribute("href");
   await page.locator("#download-arch").selectOption("arm64");
   await page.getByRole("button", { name: "EN", exact: true }).click();
-  await expect(page.locator("#download-title")).toHaveText("Choose the version for your computer");
+  await expect(page.locator("#download-title")).toHaveText("Choose the version for your device");
   await expect(page).toHaveTitle(/wisp-depmap/);
   await expect(page.locator("#release-status")).toHaveText("Available release v1.12.0");
   await expect(page.locator("#download-arch")).toHaveValue("arm64");
@@ -77,16 +84,76 @@ for (const failure of ["network", "invalid"]) {
   });
 }
 
-test("mobile layout stays within the viewport and does not guess a desktop", async ({ page }) => {
+test("Android phones get the APK preselected within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "platform", { value: "Linux aarch64" });
-    Object.defineProperty(navigator, "userAgent", { value: "Android" });
+    Object.defineProperty(navigator, "userAgent", { value: "Mozilla/5.0 (Linux; Android 14; Pixel 8)" });
+  });
+  await page.goto("/index.html#download");
+  await expect(page.locator("#download-os")).toHaveValue("android");
+  await expect(page.locator("#download-format")).toHaveValue("apk");
+  await expect(page.locator("#download-primary")).toHaveAttribute("href", /_android\.apk$/);
+  await expect(page.locator("#architecture-help")).toContainText("Android 8.0");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator("#download").screenshot({ path: "website-test-results/download-mobile.png" });
+});
+
+test("iPhone does not guess a desktop", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", { value: "iPhone" });
+    Object.defineProperty(navigator, "userAgent", { value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)" });
   });
   await page.goto("/index.html#download");
   await expect(page.locator("#download-os")).toHaveValue("");
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.locator("#download").screenshot({ path: "website-test-results/download-mobile.png" });
+  await expect(page.locator("#download-primary")).not.toHaveAttribute("href");
+});
+
+test("a release without the APK keeps desktop downloads and points Android to all releases", async ({ page }) => {
+  const desktopOnly = { ...manifest, packages: manifest.packages.filter(asset => asset.id !== "android-universal-apk") };
+  await page.route("https://wisp-science.sfl.bio/downloads/latest.json", route => route.fulfill({ json: desktopOnly }));
+  await page.goto("/index.html?lang=en#download");
+  await expect(page.locator("#release-status")).toHaveText("Available release v1.12.0");
+  await page.locator("#download-os").selectOption("windows");
+  await expect(page.locator("#download-primary")).toHaveAttribute("href", /x64-setup\.exe$/);
+  await page.locator("#download-os").selectOption("android");
+  await expect(page.locator("#download-primary")).not.toHaveAttribute("href");
+  await expect(page.locator("#package-name")).toContainText("does not include this package");
+  await expect(page.locator("#download-github")).toHaveAttribute("href", "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases");
+});
+
+test("native builds keep their own version, installation guidance and language selection", async ({ page }) => {
+  const mixed = { ...manifest, tag: "v1.20.0", packages: manifest.packages.map(asset => ({ ...asset, tag: "v1.12.0" })) };
+  await page.route("https://wisp-science.sfl.bio/downloads/latest.json", route => route.fulfill({ json: mixed }));
+  await page.goto("/index.html#download");
+  await page.locator("#download-os").selectOption("macos");
+  await page.locator("#download-arch").selectOption("arm64");
+  await page.locator("#download-format").selectOption("swiftui");
+  await expect(page.locator("#release-status")).toHaveText("可下载版本 v1.12.0 · 最新发布 v1.20.0");
+  await expect(page.locator("#install-help")).toContainText("macOS 13");
+  await page.getByRole("button", { name: "EN", exact: true }).click();
+  await expect(page.locator("#download-format")).toHaveValue("swiftui");
+  await expect(page.locator("#release-status")).toHaveText("Available release v1.12.0 · Latest release v1.20.0");
+  await expect(page.locator("#download-github")).toHaveAttribute("href", /\/v1\.12\.0\/Wisp-Science-SwiftUI_1\.12\.0_aarch64\.dmg$/);
+  await page.locator("#download-os").selectOption("windows");
+  await page.locator("#download-format").selectOption("winui-framework");
+  await expect(page.locator("#install-help")).toContainText("downloads missing");
+  await page.locator("#download-format").selectOption("winui-self-contained");
+  await expect(page.locator("#install-help")).toContainText("Includes .NET");
+  await expect(page.locator("#download-primary")).toHaveAttribute("href", /Wisp-Science-WinUI-Preview_1\.12\.0_x64-self-contained-setup\.exe$/);
+});
+
+test("missing native packages preserve standard downloads and a clear GitHub fallback", async ({ page }) => {
+  const standard = { ...manifest, packages: manifest.packages.filter(asset => !asset.id.includes("swiftui") && !asset.id.includes("winui")) };
+  await page.route("https://wisp-science.sfl.bio/downloads/latest.json", route => route.fulfill({ json: standard }));
+  await page.goto("/index.html?lang=en#download");
+  await page.locator("#download-os").selectOption("windows");
+  await expect(page.locator("#download-primary")).toHaveAttribute("href", /x64-setup\.exe$/);
+  await page.locator("#download-format").selectOption("winui-framework");
+  await expect(page.locator("#download-primary")).not.toHaveAttribute("href");
+  await expect(page.locator("#package-name")).toContainText("does not include this package");
+  await expect(page.locator("#download-github")).toHaveAttribute("href", "https://github.com/Yu-Qiao-sjtu/wisp-science-depmap/releases");
 });
 
 test("desktop download page", async ({ page }) => {
@@ -101,5 +168,5 @@ test("desktop download page", async ({ page }) => {
 test("old download URL redirects to the homepage section and preserves language", async ({ page }) => {
   await page.goto("/download.html?lang=en");
   await expect(page).toHaveURL(/index\.html\?lang=en#download$/);
-  await expect(page.locator("#download-title")).toHaveText("Choose the version for your computer");
+  await expect(page.locator("#download-title")).toHaveText("Choose the version for your device");
 });

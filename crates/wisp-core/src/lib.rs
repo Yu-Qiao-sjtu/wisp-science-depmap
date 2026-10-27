@@ -10,22 +10,26 @@ pub mod delegation;
 pub mod delegation_policy;
 pub mod execution;
 pub mod guardrail;
+pub mod map_items;
 pub mod memory;
 pub mod method_search;
 pub mod observability;
 pub mod orchestration;
 pub mod output;
+mod plan_progress;
 pub mod provenance;
 pub mod release_gate;
 pub mod scientific_intent;
 pub mod session_locks;
 pub mod specialist_manifest;
 pub mod subagent;
+pub mod swarm;
 pub mod system_prompt;
 pub mod workflow_conversion;
 
 pub use agent::{
-    agent_loop, agent_loop_continue, bound_tool_results_in_history, AgentLoopOutcome, GuidanceQueue,
+    agent_loop, bound_tool_results_in_history, AgentLoop, AgentLoopOutcome, GuidanceQueue,
+    LoopError,
 };
 pub use bridge_checkpoint::{
     checkpoint_for_outcome, checkpoint_resume_injection, latest_pending_checkpoint,
@@ -68,6 +72,7 @@ pub use guardrail::{
     GuardrailContext, GuardrailDecision, GuardrailOutcome, GuardrailSeverity,
     GUARDRAIL_CONTRACT_ID,
 };
+pub use map_items::MapItemsTool;
 pub use memory::{
     MemoryManager, MemorySearchQuery, MemorySearchRequest, MemorySearchResponse, MemorySearchResult,
 };
@@ -269,24 +274,43 @@ impl Agent {
         }
     }
 
+    /// Split the session into its conversation and the loop that drives it.
+    fn split<'a>(
+        &'a mut self,
+        output: &'a dyn Output,
+        cancel: Option<&'a std::sync::atomic::AtomicBool>,
+        guidance: Option<&'a GuidanceQueue>,
+    ) -> (&'a mut ContextManager, AgentLoop<'a>) {
+        let Self {
+            ctx,
+            provider,
+            vision_provider,
+            tools,
+            root,
+            max_iter,
+            ..
+        } = self;
+        let agent_loop = AgentLoop {
+            provider: &**provider,
+            vision_provider: vision_provider.as_deref(),
+            tools: &*tools,
+            root: &*root,
+            output,
+            max_iter: *max_iter,
+            cancel,
+            guidance,
+        };
+        (ctx, agent_loop)
+    }
+
     pub async fn run(
         &mut self,
         user_input: &str,
         output: &dyn Output,
         cancel: Option<&std::sync::atomic::AtomicBool>,
     ) -> anyhow::Result<AgentLoopOutcome> {
-        agent_loop(
-            &mut self.ctx,
-            self.provider.as_ref(),
-            self.vision_provider.as_deref(),
-            &self.tools,
-            &self.root,
-            output,
-            user_input,
-            self.max_iter,
-            cancel,
-        )
-        .await
+        let (ctx, agent_loop) = self.split(output, cancel, None);
+        agent_loop.run(ctx, user_input).await
     }
 
     pub async fn run_with_images(
@@ -298,21 +322,10 @@ impl Agent {
         cancel: Option<&std::sync::atomic::AtomicBool>,
         guidance: Option<&GuidanceQueue>,
     ) -> anyhow::Result<AgentLoopOutcome> {
-        agent::agent_loop_with_images(
-            &mut self.ctx,
-            self.provider.as_ref(),
-            self.vision_provider.as_deref(),
-            &self.tools,
-            &self.root,
-            output,
-            user_input,
-            images,
-            provider_supports_vision,
-            self.max_iter,
-            cancel,
-            guidance,
-        )
-        .await
+        let (ctx, agent_loop) = self.split(output, cancel, guidance);
+        agent_loop
+            .run_with_images(ctx, user_input, images, provider_supports_vision)
+            .await
     }
 
     /// Resume a failed turn without appending another user message.
@@ -322,18 +335,8 @@ impl Agent {
         cancel: Option<&std::sync::atomic::AtomicBool>,
         guidance: Option<&GuidanceQueue>,
     ) -> anyhow::Result<AgentLoopOutcome> {
-        agent_loop_continue(
-            &mut self.ctx,
-            self.provider.as_ref(),
-            self.vision_provider.as_deref(),
-            &self.tools,
-            &self.root,
-            output,
-            self.max_iter,
-            cancel,
-            guidance,
-        )
-        .await
+        let (ctx, agent_loop) = self.split(output, cancel, guidance);
+        agent_loop.resume(ctx).await
     }
 
     /// User-triggered `/compact`: archive the full history under
@@ -385,6 +388,10 @@ impl Agent {
 
     pub fn set_auto_compact(&mut self, enabled: bool) {
         self.ctx.set_auto_compact(enabled);
+    }
+
+    pub fn set_auto_compact_percent(&mut self, percent: u8) {
+        self.ctx.set_auto_compact_percent(percent);
     }
 
     pub fn set_auto_continue(&mut self, enabled: bool, limit: usize) {

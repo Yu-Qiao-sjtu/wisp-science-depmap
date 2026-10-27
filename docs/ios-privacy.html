@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Privacy policy for Wisp Science for iPhone and iPad.">
+  <title>iOS Privacy Policy · Wisp Science</title>
+  <style>
+    :root { color-scheme: light dark; font: 17px/1.7 system-ui, sans-serif; }
+    body { max-width: 760px; margin: 0 auto; padding: 40px 24px 80px; }
+    a { color: #0b8478; } h1, h2, h3 { line-height: 1.25; }
+    h1 { font-size: 2rem; } h2 { margin-top: 2.5rem; } h3 { margin-top: 1.8rem; }
+    .meta { color: #737373; } nav { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+    section { scroll-margin-top: 24px; } @media (prefers-color-scheme: dark) { a { color: #5ee0cb; } }
+  </style>
+</head>
+<body>
+  <nav aria-label="Page navigation"><a href="/">Wisp Science</a><a href="#english">English</a><a href="#chinese" lang="zh-Hans">简体中文</a></nav>
+  <main>
+    <h1>Wisp Science for iOS: Privacy Policy</h1>
+    <p class="meta">Effective October 14, 2026 · Developer: Zhougeng Xu</p>
+    <section id="english" lang="en">
+      <h2>Your research, on your device and your host</h2>
+      <p>This policy covers the Wisp Science app for iPhone and iPad. The app provides local experiment notes and checklists, and optional access to a Wisp Science host that you own or are authorized to use. No developer account is required. The app has no advertising, tracking, or third-party analytics SDKs, and no built-in service that uploads your research to the developer.</p>
+      <h3>Information stored on your device</h3>
+      <p>Experiment notes, selected or captured photos, recognized text, checklist items, and app preferences are stored locally. Text recognition uses Apple's on-device Vision framework. Camera access is requested when you choose to take a photo; photo selection uses the system picker. These actions do not automatically upload your notebook photos or text.</p>
+      <p>Connection codes are stored in this device's Keychain after successful authentication and are not synchronized through iCloud Keychain. Viewed remote content may be cached locally, with a default limit of 50 MB and 30 days. This cache is excluded from backups and may be removed by iOS. Local notes and checklists may be included in device backups according to your Apple settings.</p>
+      <h3>Optional remote connections</h3>
+      <p>You choose the HTTPS server address and connection code. The app uses encrypted transport and encrypts remote messages end to end between the app and the Wisp host. The relay forwards encrypted messages; it does not need the connection code or plaintext research content. A relay or network operator can receive connection metadata such as your IP address, a derived routing identifier, timing, and traffic volume, and may maintain operational logs under its own policy.</p>
+      <p>Messages and selected attachments you send go to your chosen host. Notebook pages are sent only after you select the content and confirm the destination. Checklists associated with a host synchronize when connected. Your host stores project information and may send relevant content to model providers or tools configured there. The host administrator and those services determine their own processing, retention, and access practices. Review their policies before sending confidential information. Model credentials and scientific computation remain on the host.</p>
+      <h3>Demo mode</h3>
+      <p>The bundled demo uses synthetic data and local preset replies. It does not connect to a host, upload photos, or run AI analysis. Demo interactions are reset when the demo restarts; the choice to use demo mode is saved on the device.</p>
+      <h3>Control, retention, and deletion</h3>
+      <p>In connection settings, use “Clear local cache” to remove cached remote content. “Forget connection and change server” removes the saved connection code and that server's cache. Neither action deletes local notes or information on your host. Deleting the app removes its local app data; device backups and Keychain items may persist separately, so forget the connection before deleting the app and manage backups through Apple settings. To remove content already sent to a host or model service, use that service's controls or contact its administrator. You can revoke camera access in iOS Settings.</p>
+      <h3>Support and policy changes</h3>
+      <p>If you contact us through <a href="https://github.com/xuzhougeng/wisp-science/issues">GitHub Issues</a>, the information you choose to submit is handled by GitHub and used to respond to your request. Issues are public: do not include connection codes, credentials, private research, or personal records. This policy may be updated when the app changes; the effective date above identifies this version.</p>
+    </section>
+    <section id="chinese" lang="zh-Hans">
+      <h2>iOS 隐私政策</h2>
+      <p>生效日期：2026 年 10 月 14 日。开发者：Zhougeng Xu。本政策适用于 iPhone 和 iPad 上的 Wisp Science。App 提供本地实验记录、科研清单，以及连接你拥有或获准使用的 Wisp 主机的可选功能，无需注册开发者账户。App 不包含广告、跟踪或第三方分析 SDK，也没有将研究资料自动上传给开发者的内置服务。</p>
+      <h3>保存在设备上的信息</h3>
+      <p>实验记录、拍摄或选取的照片、识别文字、清单及偏好保存在本机。文字识别使用 Apple Vision 在设备上完成。只有你选择拍照时才请求相机权限；选图使用系统照片选择器。这些操作不会自动上传记录本的照片或文字。</p>
+      <p>联机码通过验证后保存在本机钥匙串，不通过 iCloud 钥匙串同步。已查看的远程内容可缓存在设备上，默认上限为 50 MB、保留 30 天，排除备份且可能被系统回收。本地实验记录和清单可能随你的 Apple 备份设置进入设备备份。</p>
+      <h3>可选的远程连接</h3>
+      <p>你自行指定 HTTPS 服务器地址和联机码。App 使用加密传输，并对 App 与 Wisp 主机之间的消息进行端到端加密。中继转发加密消息，不需要联机码或研究资料明文。中继或网络运营者可以接触 IP 地址、派生的路由标识、连接时间和流量等元数据，并可能按其政策保存运行日志。</p>
+      <p>你发送的消息和所选附件交给指定的主机。记录本页面需要选择内容并确认目标后才会发送；属于主机的清单在联网后同步。主机保存项目信息，并可能将相关内容交给其配置的模型服务或工具。主机管理员及相关服务自行决定处理、保留和访问规则。发送机密资料前，请了解其政策。模型凭据和科学计算保留在主机上。</p>
+      <h3>演示模式</h3>
+      <p>随 App 提供的演示采用合成数据和本地预设回复，不连接主机、不上传照片、不调用 AI。重新开始演示时恢复初始交互数据；演示模式偏好保存在设备上。</p>
+      <h3>管理、保留与删除</h3>
+      <p>连接设置中的「清除本机缓存」移除缓存的远程内容；「忘记连接并更换服务器」删除已保存的联机码及该服务器的缓存。这两项操作不会删除本地实验记录或主机上的信息。删除 App 会移除其本地 App 数据；备份和钥匙串可能独立保留，请先忘记连接，再删除 App，并通过 Apple 设置管理备份。已发送到主机或模型服务的资料，需要通过对应服务的功能或联系其管理员删除。你可以在 iOS 设置中撤销相机权限。</p>
+      <h3>支持与更新</h3>
+      <p>通过 <a href="https://github.com/xuzhougeng/wisp-science/issues">GitHub Issues</a> 联系我们时，你主动提交的信息由 GitHub 处理，并用于回应你的请求。Issue 公开可见，请勿提交联机码、凭据、私密研究资料或个人记录。政策会随 App 变化更新，页首日期标明当前版本。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -64,7 +64,16 @@ const BUILT_IN_SCHEMA_NAMES: &[&str] = &[
     "search_memory",
 ];
 
-const SUBAGENT_SCHEMA_NAMES: &[&str] = &["explore", "delegate_tasks", "get_delegated_result"];
+const SUBAGENT_SCHEMA_NAMES: &[&str] = &[
+    "explore",
+    "consult_expert",
+    "map_items",
+    "delegate_tasks",
+    "get_delegated_result",
+    "dispatch_subagent",
+    "subagent_status",
+    "stop_subagent",
+];
 
 const SEARCH_MCP_TOOLS: &str = "search_mcp_tools";
 const USE_MCP_TOOL: &str = "use_mcp_tool";
@@ -161,6 +170,20 @@ impl Registry {
 
     pub fn add(&mut self, tool: Box<dyn Tool>) {
         self.tools.push(tool);
+    }
+
+    /// Refresh host-bound state on a cached agent without duplicating schemas
+    /// or leaving execution attached to the previous turn's tool instance.
+    pub fn replace(&mut self, tool: Box<dyn Tool>) {
+        if let Some(existing) = self
+            .tools
+            .iter_mut()
+            .find(|entry| entry.name() == tool.name())
+        {
+            *existing = tool;
+        } else {
+            self.add(tool);
+        }
     }
 
     /// Keep only tools named by a host-resolved capability grant.
@@ -433,13 +456,17 @@ async fn run_registered_tool(tool: &dyn Tool, args: &Value, env: &dyn ToolEnv) -
     // `Ask` shows the card then routes through `confirm`; `Allow` runs as before.
     let host_approval = env.approval_mode(name).await;
     let mutating = plan_mode_blocks(name) && !tool.read_only();
+    let unattended_ask = env.force_ask_mutations()
+        && env
+            .unattended_tools()
+            .map_or(mutating, |allowed| !allowed.contains(&name));
     let approval_bearing = host_approval == env::Approval::Ask
         || tool.minimum_approval() == env::Approval::Ask
-        || (env.force_ask_mutations() && mutating);
+        || unattended_ask;
     let approval = if host_approval == env::Approval::Deny {
         // An explicit block remains a hard policy even in Full Permission.
         env::Approval::Deny
-    } else if env.force_ask_mutations() && mutating {
+    } else if unattended_ask {
         // IM turns must not inherit an unattended Allow default, including
         // Full Permission / skip-connector bypass.
         env::Approval::Ask
@@ -854,6 +881,31 @@ mod approval_tests {
     }
 
     #[tokio::test]
+    async fn replacing_a_tool_uses_current_host_state_without_duplicate_schemas() {
+        static OLD: AtomicBool = AtomicBool::new(false);
+        static CURRENT: AtomicBool = AtomicBool::new(false);
+        let mut registry = Registry { tools: vec![] };
+        registry.add(Box::new(SpyTool(&OLD)));
+        registry.replace(Box::new(SpyTool(&CURRENT)));
+        let env = PolicyEnv {
+            root: PathBuf::from("."),
+            mode: Approval::Allow,
+            confirm_ok: true,
+            bypass: false,
+            force_ask: false,
+        };
+        assert!(
+            registry
+                .run("spy", &serde_json::json!({}), &env)
+                .await
+                .success
+        );
+        assert!(CURRENT.load(Ordering::SeqCst));
+        assert!(!OLD.load(Ordering::SeqCst));
+        assert_eq!(registry.schemas().len(), 1);
+    }
+
+    #[tokio::test]
     async fn im_force_ask_preserves_explicit_deny() {
         static RAN: AtomicBool = AtomicBool::new(false);
         RAN.store(false, Ordering::SeqCst);
@@ -893,6 +945,69 @@ mod approval_tests {
         assert!(registry.run("read", &read, &env).await.success);
         let blocked = registry.run("write", &write, &env).await;
         assert!(!blocked.success);
+        assert!(!dir.join("gated.txt").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An unattended turn whose host names the tools it may run unasked.
+    struct ListedEnv(PathBuf);
+    #[async_trait::async_trait]
+    impl ToolEnv for ListedEnv {
+        fn project_root(&self) -> &Path {
+            &self.0
+        }
+        async fn confirm(&self, _message: &str) -> bool {
+            false
+        }
+        fn force_ask_mutations(&self) -> bool {
+            true
+        }
+        fn unattended_tools(&self) -> Option<&'static [&'static str]> {
+            Some(&["read"])
+        }
+        async fn emit(&self, _event: ToolEvent) {}
+    }
+
+    #[tokio::test]
+    async fn an_unattended_turn_with_a_tool_list_asks_before_other_read_only_tools() {
+        let dir = std::env::temp_dir().join(format!(
+            "wisp-unattended-list-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("note.txt"), "hello").unwrap();
+        let mut registry = Registry::builtins();
+        registry.add(Box::new(DeferredTool));
+        let read = serde_json::json!({ "path": "note.txt" });
+        let query = serde_json::json!({ "query": "BRCA1" });
+
+        // Without a list, a read-only connector tool runs in an IM turn.
+        let im = PolicyEnv {
+            root: dir.clone(),
+            mode: Approval::Allow,
+            confirm_ok: false,
+            bypass: false,
+            force_ask: true,
+        };
+        assert!(
+            registry
+                .run("pubmed_search_articles", &query, &im)
+                .await
+                .success
+        );
+
+        // With one, the listed tool still runs and the connector asks first.
+        let listed = ListedEnv(dir.clone());
+        assert!(registry.run("read", &read, &listed).await.success);
+        let asked = registry
+            .run("pubmed_search_articles", &query, &listed)
+            .await;
+        assert!(!asked.success);
+        assert_eq!(asked.control, ToolControl::StopBatch);
+        // Tools that change state ask as before.
+        let write = serde_json::json!({ "path": "gated.txt", "content": "no" });
+        assert!(!registry.run("write", &write, &listed).await.success);
         assert!(!dir.join("gated.txt").exists());
         let _ = std::fs::remove_dir_all(dir);
     }

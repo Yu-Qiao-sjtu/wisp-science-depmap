@@ -386,6 +386,8 @@ window.__WISP_MCP_APP_BACKEND__ = "legacy-iframe";
             return { provider: "openai", api_url: "https://api.deepseek.com", model: "deepseek-v4-pro", label: "deepseek-v4-pro", has_api_key: true, locale: "en", max_iter: 100, auto_compact: true, max_tokens: 4096, reasoning_effort: "", supports_vision: true };
           case "list_models":
             return mockModels;
+          case "list_notification_sounds":
+            return ["Glass", "Hero", "Ping"].map((id) => ({ id, label: id }));
           case "get_storage_usage":
             return {
               data_dir: "C:\\mock\\AppData\\wisp-science",
@@ -475,6 +477,8 @@ window.__WISP_MCP_APP_BACKEND__ = "legacy-iframe";
             for (const model of mockModels) {
               if (model.id === p?.id) {
                 Object.assign(model, p, {
+                  // Like the backend: an omitted (null) route keeps the saved one.
+                  proxy_url: p.proxy_url ?? model.proxy_url ?? "",
                   use_for_image_generation: useForImageGeneration,
                   use_for_video_generation: useForVideoGeneration,
                 });

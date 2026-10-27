@@ -31,6 +31,9 @@ struct DelegateTasksArgs {
     #[serde(default)]
     context: String,
     tasks: Vec<DelegateTaskInput>,
+    /// Return a handle now and deliver the result later, resuming the parent.
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +142,18 @@ async fn nested_delegation_access_context(
     }))
 }
 
+/// A conversation started by a running workflow attempt. Such a child never
+/// gets the conversation-level delegation grant; it delegates only through the
+/// bounded nested capacity its parent task left it.
+pub(crate) async fn is_delegated_child_frame(store: &Store, frame_id: &str) -> bool {
+    store
+        .running_agent_workflow_attempt_for_child_frame(frame_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 pub(crate) async fn nested_delegation_available(store: &Store, frame_id: &str) -> bool {
     nested_delegation_context(store, frame_id)
         .await
@@ -198,25 +213,22 @@ pub(crate) async fn delegate_tasks_schema(
 ) -> Result<ToolSchema, String> {
     let (policy, nested) =
         delegation_policy_for_frame(store, project, frame_id, app_data, false).await?;
-    let completion = if nested.is_some() {
-        crate::delegation_completion::AgentCompletionSettings::default()
-    } else {
-        crate::delegation_completion::session_completion_settings(store, frame_id).await
-    };
     let specialists = specialists::ensure(store).await;
     Ok(build_delegate_tasks_schema(
         &policy.registry,
         &policy.host,
         &specialists,
-        completion,
+        nested.is_none(),
     ))
 }
 
+/// A delegated child's turn ends with its result, so nothing could resume it
+/// for a background completion: only top-level conversations may background.
 fn build_delegate_tasks_schema(
     registry: &CapabilityRegistry,
     host: &DelegationHostPolicy,
     specialists: &[specialists::Specialist],
-    completion: crate::delegation_completion::AgentCompletionSettings,
+    allow_background: bool,
 ) -> ToolSchema {
     let capabilities = registry.available_ids(host);
     let capability_help = capabilities
@@ -244,13 +256,13 @@ fn build_delegate_tasks_schema(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let description = match completion.policy {
-        crate::delegation_completion::AgentCompletionPolicy::Inline => "Run a bounded batch of temporary Wisp sub-Agents and return their results to this turn. Decompose the work yourself; independent tasks run in parallel, dependencies run after their prerequisites, and you must synthesize the returned evidence into your final answer. Use the smallest useful batch. Do not delegate trivial work. Nested delegation is available only when the advertised capability list explicitly includes delegation.",
-        crate::delegation_completion::AgentCompletionPolicy::Background => "Start a bounded batch of temporary Wisp sub-Agents in the background and return its durable handle immediately. Independent tasks run in parallel and dependencies wait for prerequisites. Do not wait or poll: completion will be appended to this conversation, and the parent may auto-resume when enabled. Use the smallest useful batch. Do not delegate trivial work. Nested delegation is available only when the advertised capability list explicitly includes delegation.",
-    };
-    ToolSchema::new(
+    let mut description = String::from("Execute a bounded task graph with known dependencies and deliverables, or an explicitly selected Workflow template, using temporary Wisp sub-Agents. Preserve selected templates, including single-node templates. Independent tasks run in parallel, dependencies run after their prerequisites, and you must synthesize the returned evidence into your final answer. When dispatch_subagent is available, prefer it for sustained exploration that revises scripts, waits for compute Runs, reviews results, and needs follow-up instructions. Use the smallest useful graph; task count alone does not choose the mechanism. Keep trivial work in the current conversation. Nested delegation is available only when the advertised capability list explicitly includes delegation.");
+    if allow_background {
+        description.push_str(" After choosing a bounded workflow, set background if its result should arrive later: the call returns a durable handle immediately, and you are resumed automatically with the result when the batch finishes. Background changes delivery timing, not time or budget limits. Do not wait, poll, or claim completion for a background batch.");
+    }
+    let mut schema = ToolSchema::new(
         "delegate_tasks",
-        description,
+        &description,
         json!({
             "type": "object",
             "additionalProperties": false,
@@ -336,7 +348,14 @@ fn build_delegate_tasks_schema(
             },
             "required": ["goal", "tasks"]
         }),
-    )
+    );
+    if allow_background {
+        schema.function.parameters["properties"]["background"] = json!({
+            "type": "boolean",
+            "description": "Run the batch without blocking this turn. Use only for long work, such as analyses expected to take many minutes. Omit to wait for the results in this turn."
+        });
+    }
+    schema
 }
 
 pub(crate) struct DelegateTasksTool {
@@ -392,14 +411,13 @@ impl DelegateTasksTool {
             browser_bridge.is_some(),
         )
         .await?;
-        let completion = if nested.is_some() {
-            crate::delegation_completion::AgentCompletionSettings::default()
-        } else {
-            crate::delegation_completion::session_completion_settings(&store, &frame_id).await
-        };
         let specialists = specialists::ensure(&store).await;
-        let schema =
-            build_delegate_tasks_schema(&policy.registry, &policy.host, &specialists, completion);
+        let schema = build_delegate_tasks_schema(
+            &policy.registry,
+            &policy.host,
+            &specialists,
+            nested.is_none(),
+        );
         Ok(Self {
             store,
             project,
@@ -423,12 +441,7 @@ impl DelegateTasksTool {
         policy: (CapabilityRegistry, DelegationHostPolicy),
         delegator: Arc<dyn AgentDelegator>,
     ) -> Self {
-        let schema = build_delegate_tasks_schema(
-            &policy.0,
-            &policy.1,
-            &[],
-            crate::delegation_completion::AgentCompletionSettings::default(),
-        );
+        let schema = build_delegate_tasks_schema(&policy.0, &policy.1, &[], true);
         let app_data = project.root.clone();
         let runtime_manager = wisp_runtime::RuntimeManager::local(
             app_data.clone(),
@@ -534,22 +547,16 @@ impl DelegateTasksTool {
                     })?,
             )
         } else {
-            delegation_runtime::require_session_delegation(
-                &self.store,
-                &self.project.id,
-                &self.frame_id,
-            )
-            .await?;
+            delegation_runtime::ensure_project_frame(&self.store, &self.project.id, &self.frame_id)
+                .await?;
             None
         };
         let parsed: DelegateTasksArgs = serde_json::from_value(args.clone())
             .map_err(|error| format!("invalid task batch: {error}"))?;
-        let completion = if nested.is_some() {
-            crate::delegation_completion::AgentCompletionSettings::default()
-        } else {
-            crate::delegation_completion::session_completion_settings(&self.store, &self.frame_id)
-                .await
-        };
+        let background = parsed.background;
+        if background && nested.is_some() {
+            return Err("A delegated Agent cannot start a background batch; omit background to wait for the results.".into());
+        }
         let workflow_id = uuid::Uuid::new_v4().to_string();
         let (registry, host, resources) = self.policy().await?;
         let proposal = DynamicAgentWorkflowProposal {
@@ -658,10 +665,10 @@ impl DelegateTasksTool {
                 "message": "The parent turn was cancelled before any delegated Agent started."
             }));
         }
-        if completion.policy == crate::delegation_completion::AgentCompletionPolicy::Background {
+        if background {
             let delivery = self
                 .store
-                .create_agent_workflow_delivery(&workflow_id, completion.auto_resume)
+                .create_agent_workflow_delivery(&workflow_id, true)
                 .await
                 .map_err(|error| error.to_string())?;
             let store = self.store.clone();
@@ -730,7 +737,6 @@ impl DelegateTasksTool {
                 &workflow_id,
                 &plan,
                 &display_ids,
-                completion.auto_resume,
             ));
         }
         if let Some(context) = &nested {
@@ -824,7 +830,6 @@ fn background_execution_handle(
     workflow_id: &str,
     plan: &wisp_core::DelegationPlan,
     display_ids: &HashMap<String, String>,
-    auto_resume: bool,
 ) -> Value {
     let tasks = plan
         .steps
@@ -840,14 +845,14 @@ fn background_execution_handle(
         "workflow_id": workflow_id,
         "status": "running",
         "completion_policy": "background",
-        "auto_resume": auto_resume,
+        "auto_resume": true,
         "tasks": tasks,
         "lookup": {
             "tool": "get_delegated_result",
             "mcp_tool": "wisp_get_delegated_result",
             "workflow_id": workflow_id
         },
-        "message": "The delegated batch is running in the background. Do not poll or claim completion; one durable result will be delivered to this conversation."
+        "message": "The delegated batch is running in the background. Do not poll or claim completion; one durable result will be delivered to this conversation and you will be resumed to synthesize it."
     })
 }
 
@@ -959,7 +964,7 @@ pub(crate) fn compact_execution_result(
         .collect::<Vec<_>>();
     let resumable = execution.status != wisp_core::DelegationExecutionStatus::Succeeded;
     let message = if resumable {
-        "This persisted workflow is resumable. Do not create a replacement delegate_tasks plan automatically: report the failure and workflow_id. Retry from the Agents activity card reruns only unsuccessful tasks, and its failed-task token budget can be adjusted there."
+        "Report the failure reason and workflow_id. After the previous execution has stopped, Retry from the Agents activity card starts a new execution with fresh time and budget allowances and reuses successful task results. Historical attempts and usage are retained. Failed or cancelled task budgets can be adjusted there. Inspect the cause before retrying; do not create a replacement delegate_tasks plan automatically."
     } else {
         "Synthesize these ordered delegated results into the final answer. Independent failures are partial evidence; do not hide them."
     };
@@ -1074,12 +1079,8 @@ impl Tool for GetDelegatedResultTool {
 impl GetDelegatedResultTool {
     pub(crate) async fn read_result(&self, args: &Value) -> Result<Value, String> {
         if !nested_result_access_available(&self.store, &self.frame_id).await {
-            delegation_runtime::require_session_delegation(
-                &self.store,
-                &self.project_id,
-                &self.frame_id,
-            )
-            .await?;
+            delegation_runtime::ensure_project_frame(&self.store, &self.project_id, &self.frame_id)
+                .await?;
         }
         let workflow_id = required_arg(args, "workflow_id")?;
         let task_id = required_arg(args, "task_id")?;
@@ -1560,12 +1561,6 @@ mod tests {
         (store, project, root)
     }
 
-    async fn enable_delegation(store: &Store) {
-        delegation_runtime::save_session_delegation_enabled(store, "p", "f", true)
-            .await
-            .unwrap();
-    }
-
     fn parse_tool_result(result: &ToolResult) -> Value {
         assert!(result.success, "{}", result.content);
         serde_json::from_str(&result.content).unwrap()
@@ -1598,7 +1593,7 @@ mod tests {
                 connectors: None,
                 builtin: false,
             }],
-            crate::delegation_completion::AgentCompletionSettings::default(),
+            true,
         );
         let parameters = schema.function.parameters.to_string();
         assert!(parameters.contains("paper-expert"));
@@ -1608,10 +1603,46 @@ mod tests {
         assert!(!parameters.contains("private-model-binding"));
     }
 
+    #[test]
+    fn background_is_a_per_call_choice_offered_only_to_top_level_conversations() {
+        let (registry, host) = test_policy();
+        let parent = build_delegate_tasks_schema(&registry, &host, &[], true);
+        assert_eq!(
+            parent.function.parameters["properties"]["background"]["type"],
+            "boolean"
+        );
+        assert!(!parent.function.parameters["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("background")));
+        assert!(parent.function.description.contains("background"));
+        assert!(parent
+            .function
+            .description
+            .contains("prefer it for sustained exploration"));
+        assert!(parent
+            .function
+            .description
+            .contains("including single-node templates"));
+        assert!(parent
+            .function
+            .description
+            .contains("not time or budget limits"));
+
+        let child = build_delegate_tasks_schema(&registry, &host, &[], false);
+        assert!(child.function.parameters["properties"]
+            .get("background")
+            .is_none());
+        assert!(!child.function.description.contains("background"));
+        assert!(child
+            .function
+            .description
+            .contains("When dispatch_subagent is available"));
+    }
+
     #[tokio::test]
     async fn parent_agent_delegates_parallel_tasks_and_synthesizes_inline() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
         let delegator = Arc::new(FakeDelegator::new(&[], &[]));
         let args = json!({
             "goal": "Compare two independent inputs",
@@ -1693,18 +1724,6 @@ mod tests {
     #[tokio::test]
     async fn background_batch_returns_handle_then_delivers_one_internal_result() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
-        crate::delegation_completion::save_session_completion_settings(
-            &store,
-            "p",
-            "f",
-            crate::delegation_completion::AgentCompletionSettings {
-                policy: crate::delegation_completion::AgentCompletionPolicy::Background,
-                auto_resume: false,
-            },
-        )
-        .await
-        .unwrap();
         let delegator = Arc::new(FakeDelegator::new(&[], &[]));
         let tool =
             DelegateTasksTool::with_runtime(store.clone(), project, "f", test_policy(), delegator);
@@ -1712,6 +1731,7 @@ mod tests {
             .run(
                 &json!({
                     "goal": "Analyze without blocking the parent",
+                    "background": true,
                     "tasks": [{
                         "id": "background",
                         "instruction": "Return one result.",
@@ -1724,15 +1744,15 @@ mod tests {
         let handle = parse_tool_result(&result);
         assert_eq!(handle["status"], "running");
         assert_eq!(handle["completion_policy"], "background");
+        assert_eq!(handle["auto_resume"], true);
         let workflow_id = handle["workflow_id"].as_str().unwrap();
-        assert_eq!(
-            store
-                .list_agent_workflow_deliveries(workflow_id)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        let deliveries = store
+            .list_agent_workflow_deliveries(workflow_id)
+            .await
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        // A background batch always wakes its parent; there is no silent mode.
+        assert!(deliveries[0].auto_resume);
 
         let ready = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
@@ -1777,18 +1797,6 @@ mod tests {
     #[tokio::test]
     async fn cancellation_before_background_start_is_explicit_and_spawns_nothing() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
-        crate::delegation_completion::save_session_completion_settings(
-            &store,
-            "p",
-            "f",
-            crate::delegation_completion::AgentCompletionSettings {
-                policy: crate::delegation_completion::AgentCompletionPolicy::Background,
-                auto_resume: true,
-            },
-        )
-        .await
-        .unwrap();
         let delegator = Arc::new(FakeDelegator::new(&[], &[]));
         let tool = DelegateTasksTool::with_runtime(
             store.clone(),
@@ -1801,6 +1809,7 @@ mod tests {
             .run(
                 &json!({
                     "goal": "Cancelled batch",
+                    "background": true,
                     "tasks": [{
                         "id": "never_started",
                         "instruction": "Must not run.",
@@ -1833,18 +1842,6 @@ mod tests {
     #[tokio::test]
     async fn cancellation_after_background_start_delivers_cancelled_terminal_result() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
-        crate::delegation_completion::save_session_completion_settings(
-            &store,
-            "p",
-            "f",
-            crate::delegation_completion::AgentCompletionSettings {
-                policy: crate::delegation_completion::AgentCompletionPolicy::Background,
-                auto_resume: false,
-            },
-        )
-        .await
-        .unwrap();
         let delegator = Arc::new(CancellableDelegator {
             cancelled: AtomicBool::new(false),
         });
@@ -1855,6 +1852,7 @@ mod tests {
                 .run(
                     &json!({
                         "goal": "Cancel a running batch",
+                        "background": true,
                         "tasks": [{
                             "id": "running",
                             "instruction": "Wait until cancelled.",
@@ -1929,7 +1927,6 @@ mod tests {
     #[tokio::test]
     async fn inline_batch_runs_two_tasks_in_parallel_then_supplies_fan_in_results() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
         let delegator = Arc::new(FakeDelegator::new(&[], &[]));
         let tool = DelegateTasksTool::with_runtime(
             store.clone(),
@@ -1987,7 +1984,6 @@ mod tests {
     #[tokio::test]
     async fn durable_resource_references_survive_persistence_and_parent_delivery() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
         let tool = DelegateTasksTool::with_runtime(
             store.clone(),
             project,
@@ -2033,7 +2029,6 @@ mod tests {
     #[tokio::test]
     async fn approval_denial_starts_no_children_and_returns_feedback_to_parent() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
         let delegator = Arc::new(FakeDelegator::new(&[], &[]));
         let tool = DelegateTasksTool::with_runtime(
             store.clone(),
@@ -2087,7 +2082,6 @@ mod tests {
     #[tokio::test]
     async fn independent_success_survives_failure_while_only_descendants_are_blocked() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
         let delegator = Arc::new(FakeDelegator::new(&["bad"], &[]));
         let tool = DelegateTasksTool::with_runtime(
             store.clone(),
@@ -2149,7 +2143,6 @@ mod tests {
     #[tokio::test]
     async fn task_output_schema_violations_degrade_and_full_result_can_be_loaded() {
         let (store, project, root) = fixture().await;
-        enable_delegation(&store).await;
         let delegator = Arc::new(FakeDelegator::new(&[], &["invalid"]));
         let tool =
             DelegateTasksTool::with_runtime(store.clone(), project, "f", test_policy(), delegator);
@@ -2214,13 +2207,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_session_cannot_invoke_inline_delegation() {
+    async fn foreign_conversation_cannot_invoke_inline_delegation() {
         let (store, project, root) = fixture().await;
+        store.create_project("p2", "Two", "").await.unwrap();
+        store
+            .create_frame("f2", "p2", "Agent", "local")
+            .await
+            .unwrap();
         let delegator = Arc::new(FakeDelegator::new(&[], &[]));
         let tool = DelegateTasksTool::with_runtime(
             store.clone(),
             project,
-            "f",
+            "f2",
             test_policy(),
             delegator.clone(),
         );
@@ -2240,7 +2238,9 @@ mod tests {
             .await;
 
         assert!(!result.success);
-        assert!(result.content.contains("delegation is off"));
+        assert!(result
+            .content
+            .contains("does not belong to the active project"));
         assert!(delegator.calls().is_empty());
         assert!(store.list_agent_workflows("p").await.unwrap().is_empty());
         drop(store);

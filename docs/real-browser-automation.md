@@ -95,6 +95,53 @@ reconnects to `ws://127.0.0.1:28765` when Wisp DepMap is running. Only loopback
 connections whose WebSocket origin is a Chrome extension with Wisp's bundled,
 stable extension ID are accepted.
 
+Extension 0.4.1 adds liveness detection for the bridge socket. The service
+worker sends a JSON ping every 20 seconds and Wisp answers each one with a
+pong, so a healthy connection always carries inbound traffic. If Wisp has been
+silent for more than 90 seconds while the socket still reports open (a
+half-open TCP connection after an app restart, sleep/resume, or a dropped
+network path), the extension closes that socket itself and reconnects instead
+of waiting for a close that never arrives. On the app side a new extension
+registration closes the superseded socket at once, and only the registered
+connection receives pongs, so a stale service worker drops out on its own.
+Reloading the extension in `chrome://extensions` is no longer needed to recover
+from a `WISP_BROWSER_DISCONNECTED` state that `netstat` still shows as
+`ESTABLISHED`.
+
+## Ask about the current page (side panel)
+
+Extension 0.4.0 adds a Chrome side panel that answers questions about the tab
+you are looking at with Wisp's own agent loop. You do not have to switch to the
+Wisp window, paste the URL into a chat site, or download the PDF first.
+
+Open it in any of these ways:
+
+- the extension popup → **Ask about this page**
+- right-click the page or a selection → **Ask Wisp about this page**
+- `Alt+Shift+W` (change it at `chrome://extensions/shortcuts`)
+
+How it behaves:
+
+- Wisp must be running; its window can stay in the background.
+- The first question of a panel conversation creates an ordinary conversation
+  in the project open in Wisp's main window, titled after the page. Follow-up
+  questions continue it and **New chat** starts another. The conversation is
+  visible in the desktop app and can be continued there.
+- The first question about a URL carries the page's visible text (up to 50,000
+  characters). Text you selected beforehand (up to 20,000 characters) is sent
+  as well, and the question is taken to be about that passage first.
+- A tab whose text cannot be read, such as Chrome's PDF viewer, sends only its
+  URL. The agent then reads the document with its own tools.
+- Side panel turns have the approval floor of an IM message: every tool that
+  changes something asks first, as does every page-access tool. The request
+  appears in the panel with **Allow once** and **Deny**, and in the desktop app.
+- Page text is quoted as untrusted content and is never treated as
+  instructions.
+- **Stop** cancels the running turn.
+- The reply is rendered as Markdown: headings, lists, tables, block quotes,
+  code, emphasis, and `http(s)` / `mailto` links. HTML in a reply is shown as
+  text, never interpreted.
+
 ## Human-verification handoff
 
 When `web_scan` detects an **Are you a robot?** page together with a request to
@@ -165,6 +212,9 @@ These settings must be changed manually because internal settings pages such as
   the script navigates or the tab returns to `loading`.
 - `web_open_tab`: open an HTTP(S) tab. The call waits until that tab's document
   is `complete` (or times out) and returns `ready` plus the real URL/title.
+  If the browser is still running with no window open, for example after
+  turn-end cleanup closed the last one, the tab opens in a new window; that
+  window takes focus only when `active` is true.
   Blocked hosts from **Settings → Browser** are refused before the tab opens.
   When a prefer list is set, a successful result includes `preferred` so
   literature tasks can stay on those sites.
@@ -188,8 +238,9 @@ HTTP(S) tab in that Chrome profile.
 
 ## Security and limits
 
-- The extension asks only for `tabs`, `scripting`, `debugger`, and the alarm used
-  to reconnect. It has no dedicated cookie-export API, does not remove page CSP,
+- The extension asks for `tabs`, `scripting`, `debugger`, `downloads`, `storage`,
+  `sidePanel`, `contextMenus`, and the alarm used to reconnect. It has no
+  dedicated cookie-export API, does not remove page CSP,
   disable dialogs, or change content settings. Approved page JavaScript or raw
   CDP commands are still powerful and should be treated as access to the tab.
 - Ordinary execution uses Chrome's scripting API. Wisp falls back to a temporary

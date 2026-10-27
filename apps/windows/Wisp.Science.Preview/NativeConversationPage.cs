@@ -16,6 +16,17 @@ namespace Wisp.Science.Preview;
 
 internal sealed partial class NativeConversationPage : UserControl, IDisposable
 {
+    public void FocusComposer()
+    {
+        var owner = model.Snapshot;
+        // Closing a narrow panel reparents the page; its SizeChanged handler
+        // re-enables the conversation after layout. Focus only that same session.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (!disposed && IsLoaded && owner?.ProjectId == model.Snapshot?.ProjectId
+                && owner?.SessionId == model.Snapshot?.SessionId) composer.Focus(FocusState.Keyboard);
+        });
+    }
     // Keep native Button focus/pressed states and accessible text.
     // Secondary actions remain present for touch and keyboard users at all times.
     private Button MessageAction(string label)
@@ -43,7 +54,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
     private readonly Func<Task> create;
     private readonly StackPanel transcript = new() { Spacing = 18, MaxWidth = PreviewLayout.ConversationMaxWidth, Margin = new Thickness(16) };
     private readonly StackPanel approvals = new() { Spacing = 12, MaxWidth = PreviewLayout.ConversationMaxWidth, Margin = new Thickness(16, 0, 16, 12) };
-    private readonly TextBox composer = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 44, PlaceholderText = "向 Wisp Science 提问…" };
+    private readonly TextBox composer = new() { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 44, PlaceholderText = "请输入问题 — @ 附加产物，# 附加会话，/ 选择技能…" };
     private readonly ComboBox models = new() { MaxWidth = 230 };
     private readonly ComboBox efforts = new() { MaxWidth = 100, MinWidth = 72, Visibility = Visibility.Collapsed };
     private bool updatingEfforts;
@@ -69,14 +80,19 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         IsItemClickEnabled = true, Visibility = Visibility.Collapsed };
     private bool composing, compositionJustEnded, commandsDismissed, updatingModels;
     private string? attachmentFingerprint;
+    private string? pickerSession;
     private bool disposed, followLatest = true;
     private bool userScrollPending;
     private readonly Button follow = new() { Content = "回到最新", Visibility = Visibility.Collapsed };
-    private readonly Dictionary<string, (string Fingerprint, FrameworkElement Element)> renderedRows = [];
+    private readonly Dictionary<string, (string Fingerprint, FrameworkElement Element, bool TerminalRun)> renderedRows = [];
     private sealed class ActivityDisclosure
     {
         public Microsoft.UI.Xaml.Controls.Primitives.ToggleButton Button { get; } = new();
+        public StackPanel Header { get; } = new() { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Left };
+        public StackPanel Reviews { get; } = new() { Spacing = 4 };
+        public string[] ReviewIds { get; set; } = [];
         public List<FrameworkElement> Rows { get; } = [];
+        public ActivityDisclosure() { Header.Children.Add(Button); Header.Children.Add(Reviews); }
         public void Update()
         {
             var expanded = Button.IsChecked == true;
@@ -91,14 +107,21 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
     private readonly Action? openHosts;
     private readonly Action<string>? openRun;
     private readonly Func<Task<string?>>? pickAttachment;
+    private readonly Func<string, Task>? createAcp;
+    private readonly Func<string, string, string, Task>? openHistoryBranch;
 
     public NativeConversationPage(WorkspaceConversationModel model, WispDesign design, Action<string> quote, Func<Task> create,
         Func<Task<string?>>? pickAttachment = null, Func<string, bool>? slashCommand = null, Action? openHosts = null,
-        Action<string>? openRun = null)
+        Action<string>? openRun = null, Func<string, Task>? createAcp = null,
+        Func<string, string, string, Task>? openHistoryBranch = null, Func<string, Task>? reviewRun = null, Func<bool>? canShowRunReview = null)
     {
         this.model = model; this.design = design; this.quote = quote; this.create = create;
         this.slashCommand = slashCommand; this.openHosts = openHosts; this.pickAttachment = pickAttachment;
         this.openRun = openRun;
+        this.reviewRun = reviewRun;
+        this.canShowRunReview = canShowRunReview;
+        this.createAcp = createAcp;
+        this.openHistoryBranch = openHistoryBranch;
         design.BindTypography(status, 12); design.BindTypography(hint, 11);
         var root = new Grid();
         root.RowDefinitions.Add(new() { Height = GridLength.Auto });
@@ -114,6 +137,8 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         acknowledge.Click += (_, _) => model.AcknowledgeUncertainSend();
         var banner = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(24, 8, 24, 0) };
         banner.Children.Add(retry); banner.Children.Add(acknowledge);
+        acknowledgeHistory.Click += (_, _) => model.AcknowledgeHistoryResult();
+        banner.Children.Add(acknowledgeHistory);
         var header = new StackPanel(); header.Children.Add(status); header.Children.Add(banner);
         root.Children.Add(header);
         scroll.Content = transcript; Grid.SetRow(scroll, 1); root.Children.Add(scroll);
@@ -139,17 +164,18 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
             commandsDismissed = false;
             UpdateSlashHint();
         };
+        composer.SelectionChanged += (_, _) => { if (!composing && !commandsDismissed) UpdateSlashHint(); };
         composer.TextCompositionStarted += (_, _) => composing = true;
         composer.TextCompositionEnded += (_, _) =>
         {
             composing = false; compositionJustEnded = true;
             DispatcherQueue.TryEnqueue(() => compositionJustEnded = false);
         };
-        composer.KeyDown += (_, e) =>
+        composer.PreviewKeyDown += (_, e) =>
         {
             if (composing || compositionJustEnded) return;
-            var shift = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(VirtualKeyStates.Down);
-            var control = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(VirtualKeyStates.Down);
+            var shift = (InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+            var control = (InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
             if (commandChoices.Visibility == Visibility.Visible && !control && !shift)
             {
                 if (e.Key is VirtualKey.Up or VirtualKey.Down)
@@ -158,14 +184,14 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                     commandChoices.SelectedIndex = (commandChoices.SelectedIndex + direction + commandChoices.Items.Count) % commandChoices.Items.Count;
                     commandChoices.ScrollIntoView(commandChoices.SelectedItem); e.Handled = true; return;
                 }
-                if (e.Key is VirtualKey.Enter or VirtualKey.Tab && commandChoices.SelectedItem is NativeComposerCommand selected)
-                { ChooseCommand(selected); e.Handled = true; return; }
+                if (e.Key is VirtualKey.Enter or VirtualKey.Tab && commandChoices.SelectedItem is { } selected)
+                { ChooseComposerItem(selected); e.Handled = true; return; }
             }
-            if (e.Key == VirtualKey.Enter && NativeComposerCommands.ShouldSubmit(control, shift, composing || compositionJustEnded))
+            if (e.Key == VirtualKey.Enter && NativeComposerCommands.ShouldSubmit(control, shift, composing || compositionJustEnded, model.InputPreferences.SendWithModifier))
             { e.Handled = true; Submit(); }
         };
-        commandChoices.ItemClick += (_, e) => { if (e.ClickedItem is NativeComposerCommand command) ChooseCommand(command); };
-        AutomationProperties.SetName(commandChoices, "命令候选，方向键选择，Enter 填入，Ctrl+Enter 执行");
+        commandChoices.ItemClick += (_, e) => ChooseComposerItem(e.ClickedItem);
+        AutomationProperties.SetName(commandChoices, "命令与引用候选，方向键选择，Enter 填入");
         send.Click += (_, _) => Submit();
         stop.Click += async (_, _) => await model.StopAsync(lifetime.Token);
         models.SelectionChanged += async (_, _) =>
@@ -234,23 +260,30 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         actions.RowDefinitions.Add(new() { Height = GridLength.Auto });
         var leading = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         leading.Children.Add(attach); leading.Children.Add(options); actions.Children.Add(leading);
-        var tools = new Grid { ColumnSpacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        var tools = new Grid { ColumnSpacing = 6, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        tools.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         tools.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
         for (var i = 0; i < 3; i++) tools.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        tools.Children.Add(models);
-        Grid.SetColumn(efforts, 1); tools.Children.Add(efforts);
-        Grid.SetColumn(fastMode, 2); tools.Children.Add(fastMode);
+        SetupReading(); SetupAcpSettings();
+        tools.Children.Add(contextUsage);
+        Grid.SetColumn(models, 1); tools.Children.Add(models);
+        Grid.SetColumn(efforts, 2); tools.Children.Add(efforts);
+        Grid.SetColumn(fastMode, 3); tools.Children.Add(fastMode);
         var primary = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         primary.Children.Add(queue); primary.Children.Add(send); primary.Children.Add(stop);
-        Grid.SetColumn(primary, 3); tools.Children.Add(primary);
+        Grid.SetColumn(primary, 4); tools.Children.Add(primary);
         Grid.SetColumn(tools, 1); actions.Children.Add(tools);
         actions.SizeChanged += (_, e) =>
         {
             var narrow = PreviewLayout.StackComposerSend(e.NewSize.Width);
             Grid.SetColumn(tools, narrow ? 0 : 1); Grid.SetColumnSpan(tools, narrow ? 2 : 1);
             Grid.SetRow(tools, narrow ? 1 : 0);
+            tools.HorizontalAlignment = narrow ? HorizontalAlignment.Stretch : HorizontalAlignment.Right;
+            models.MinWidth = narrow ? 80 : 144;
         };
         var card = new StackPanel { Spacing = 8, Padding = new Thickness(14) };
+        InitializeQueue();
+        card.Children.Add(queueCard);
         composer.MinHeight = 56;
         composer.BorderThickness = new Thickness(0);
         composer.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
@@ -258,7 +291,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         composer.Resources["TextControlBackgroundFocused"] = design.Brush("bg-elev");
         composer.Resources["TextControlBorderBrushFocused"] = design.Brush("clay");
         composer.MaxHeight = 240;
-        card.Children.Add(commandChoices); card.Children.Add(attachments); card.Children.Add(composer);
+        card.Children.Add(followUpQuestions); card.Children.Add(commandChoices); card.Children.Add(attachments); card.Children.Add(composer);
         design.BindTypography(slashHint, 11);
         slashHint.Foreground = design.Brush("text-faint");
         slashHint.Text = "方向键选择 · Enter 填入 · Ctrl+Enter 执行";
@@ -269,7 +302,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         footer.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         var footerHints = new StackPanel { Spacing = 2 };
         footerHints.Children.Add(slashHint);
-        hint.Text = "Ctrl+Enter 发送 · Enter 换行";
+        hint.Text = model.InputPreferences.Hint;
         hint.Foreground = design.Brush("text-faint");
         hint.HorizontalAlignment = HorizontalAlignment.Center; hint.TextAlignment = TextAlignment.Center;
         card.Children.Add(hint); card.Children.Add(actions);
@@ -285,7 +318,9 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
             BorderBrush = design.Brush("border-strong"), Background = design.Brush("bg-elev"),
             Margin = new Thickness(20, 0, 20, 8), MaxWidth = PreviewLayout.ConversationMaxWidth };
         var inputArea = new StackPanel { Spacing = 4, MaxWidth = PreviewLayout.ConversationMaxWidth + 40 };
-        hosts.Margin = new Thickness(20, 0, 20, 0); inputArea.Children.Add(hosts); inputArea.Children.Add(border);
+        inputArea.Children.Add(planProgress);
+        hosts.Margin = new Thickness(20, 0, 20, 0); inputArea.Children.Add(hosts);
+        inputArea.Children.Add(border);
         Grid.SetRow(inputArea, 1); composerBar.Children.Add(inputArea);
         Grid.SetRow(footer, 2); composerBar.Children.Add(footer);
         Grid.SetRow(composerBar, 3); root.Children.Add(composerBar);
@@ -296,6 +331,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         model.Changed += Refresh;
         model.Effort.Changed += Refresh;
         model.Options.Changed += Refresh;
+        model.ReferencePicker.Changed += RenderComposerChoices;
         design.TypographyChanged += Refresh;
         _ = PollAsync();
     }
@@ -328,15 +364,50 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
 
     private void UpdateSlashHint()
     {
-        var matches = commandsDismissed || !composer.IsEnabled ? []
-            : NativeComposerCommands.Match(composer.Text, pickAttachment != null, slashCommand != null);
-        var previous = (commandChoices.SelectedItem as NativeComposerCommand)?.Command;
-        commandChoices.ItemsSource = matches;
-        commandChoices.SelectedIndex = matches.Count == 0 ? -1 : Math.Max(0, matches.ToList().FindIndex(item => item.Command == previous));
-        commandChoices.Visibility = matches.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        slashHint.Visibility = !commandsDismissed && composer.Text.TrimStart().StartsWith('/') ? Visibility.Visible : Visibility.Collapsed;
-        slashHint.Text = matches.Count > 0 ? "方向键选择 · Enter 填入 · Ctrl+Enter 执行"
-            : "命令不存在或包含额外文字；草稿已保留。输入 / 查看可用命令。";
+        var token = !commandsDismissed && !composing && model.CanAttach && model.Snapshot?.ComposerReferences == true
+            ? NativeComposerToken.Find(composer.Text, composer.SelectionStart) : null;
+        if (token != model.ReferencePicker.Token)
+        {
+            if (token == null) model.ReferencePicker.Dismiss();
+            else _ = model.ReferencePicker.SearchAsync(token, lifetime.Token);
+        }
+        RenderComposerChoices();
+    }
+
+    private void RenderComposerChoices()
+    {
+        if (disposed) return;
+        var choices = new List<object>();
+        if (!commandsDismissed && composer.IsEnabled && !composing)
+        {
+            choices.AddRange(NativeComposerCommands.Match(composer.Text, pickAttachment != null, slashCommand != null));
+            if (model.ReferencePicker.Token == NativeComposerToken.Find(composer.Text, composer.SelectionStart))
+                choices.AddRange(model.ReferencePicker.Options);
+        }
+        var selected = commandChoices.SelectedItem;
+        commandChoices.ItemsSource = choices;
+        commandChoices.SelectedIndex = choices.Count == 0 ? -1 : Math.Max(0, choices.IndexOf(selected));
+        commandChoices.Visibility = choices.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        slashHint.Visibility = !commandsDismissed && (model.ReferencePicker.Token != null || composer.Text.TrimStart().StartsWith('/'))
+            ? Visibility.Visible : Visibility.Collapsed;
+        slashHint.Text = model.ReferencePicker.Error ?? (model.ReferencePicker.Loading ? "正在查找引用…"
+            : choices.Count > 0 ? "方向键选择 · Enter/Tab 添加引用或填入命令 · Esc 关闭"
+            : "没有匹配项；草稿已保留。输入 @、# 或 / 查找引用与命令。");
+    }
+
+    private void ChooseComposerItem(object choice)
+    {
+        if (choice is NativeComposerCommand command) { ChooseCommand(command); return; }
+        if (choice is not NativeReferenceOption reference || model.ReferencePicker.Token is not { } token
+            || token != NativeComposerToken.Find(composer.Text, composer.SelectionStart)) return;
+        var draft = composer.Text;
+        if (!model.AddReference(reference)) return;
+        composer.Text = token.RemoveFrom(draft);
+        composer.SelectionStart = token.Start;
+        commandsDismissed = true;
+        model.ReferencePicker.Dismiss();
+        RenderComposerChoices();
+        composer.Focus(FocusState.Programmatic);
     }
 
     private void ChooseCommand(NativeComposerCommand command)
@@ -344,18 +415,22 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         composer.Text = command.Command;
         composer.SelectionStart = composer.Text.Length;
         commandsDismissed = true; commandChoices.Visibility = Visibility.Collapsed;
-        slashHint.Text = "Ctrl+Enter 执行命令";
+        model.ReferencePicker.Dismiss();
+        slashHint.Text = model.InputPreferences.SendWithModifier ? "Ctrl+Enter 执行命令" : "Enter 执行命令";
         composer.Focus(FocusState.Programmatic);
     }
 
     public bool HandleEscape()
     {
+        if (HandleReadingEscape()) return true;
+        if (HandleAcpEscape()) return true;
         if (HandleComposerOptionsEscape()) return true;
         if (efforts.IsDropDownOpen) { efforts.IsDropDownOpen = false; return true; }
         if (composing || compositionJustEnded) return false;
         if (models.IsDropDownOpen) { models.IsDropDownOpen = false; return true; }
-        if (commandChoices.Visibility != Visibility.Visible) return false;
+        if (commandChoices.Visibility != Visibility.Visible && model.ReferencePicker.Token == null) return false;
         commandsDismissed = true; commandChoices.Visibility = slashHint.Visibility = Visibility.Collapsed;
+        model.ReferencePicker.Dismiss();
         return true;
     }
 
@@ -386,18 +461,22 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
 
     public void Refresh()
     {
+        RefreshHistoryActions();
+        hint.Text = model.InputPreferences.Hint;
         if (disposed) return;
         var session = model.Snapshot is { } snapshot ? snapshot.ProjectId + "/" + snapshot.SessionId : null;
         if (session != readingSession)
         {
             optionSubmenu.Hide(); composerOptions.Hide();
+            selectionFlyout?.Hide(); contextUsageFlyout.Hide();
+            acpCreationMenu?.Hide();
             readingSession = session; followLatest = true; userScrollPending = false;
         }
         FontFamily = design.Font(); FontSize = design.FontSize(14);
         composer.FontFamily = design.Font(); composer.FontSize = design.FontSize(14);
         var error = model.ConnectionError ?? model.OperationError ?? model.Effort.Error ?? model.Snapshot?.Error;
         retry.Visibility = error != null ? Visibility.Visible : Visibility.Collapsed;
-        acknowledge.Visibility = model.UncertainSend ? Visibility.Visible : Visibility.Collapsed;
+        acknowledge.Visibility = model.UncertainSend || model.QueueUncertain ? Visibility.Visible : Visibility.Collapsed;
         status.Text = error ?? "";
         status.Foreground = design.Brush(error == null ? "text-muted" : "clay-strong");
         status.Visibility = error == null && !model.UncertainSend ? Visibility.Collapsed : Visibility.Visible;
@@ -411,9 +490,10 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         stop.Visibility = model.Snapshot?.Running == true ? Visibility.Visible : Visibility.Collapsed;
         send.IsEnabled = model.CanSend; stop.IsEnabled = !model.Busy;
         attach.IsEnabled = model.CanAttach; queue.IsEnabled = model.CanQueue;
-        queue.Content = model.QueuedFollowUp == null ? "排队后续" : "后续已排队";
+        queue.Content = model.Snapshot?.Queue != null || model.QueuedFollowUp == null ? "排队后续" : "后续已排队";
         queue.Visibility = model.Snapshot?.Running == true || model.QueuedFollowUp != null ? Visibility.Visible : Visibility.Collapsed;
-        var nextAttachments = JsonSerializer.Serialize(model.Attachments) + $"/{model.Busy}/{model.UncertainSend}";
+        var nextAttachments = JsonSerializer.Serialize(model.Attachments) + JsonSerializer.Serialize(model.References)
+            + JsonSerializer.Serialize(model.Quotes) + $"/{model.CanAttach}";
         if (nextAttachments != attachmentFingerprint)
         {
             attachmentFingerprint = nextAttachments;
@@ -424,8 +504,28 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                 AutomationProperties.SetName(remove, "移除附件 " + file.Name);
                 remove.Click += (_, _) => model.RemoveAttachment(file.Path); attachments.Children.Add(remove);
             }
+            foreach (var reference in model.References)
+            {
+                var remove = new Button { Content = reference.Label + " · 移除", IsEnabled = model.CanAttach };
+                AutomationProperties.SetName(remove, "移除引用 " + reference.Label);
+                ToolTipService.SetToolTip(remove, reference.Detail);
+                remove.Click += (_, _) => model.RemoveReference(reference.Reference.Key);
+                attachments.Children.Add(remove);
+            }
+            foreach (var quote in model.Quotes)
+            {
+                var chip = new StackPanel { Spacing = 3 };
+                chip.Children.Add(design.Text(quote.Source, 11));
+                chip.Children.Add(new TextBlock { Text = quote.Text, MaxLines = 2, TextWrapping = TextWrapping.Wrap,
+                    TextTrimming = TextTrimming.CharacterEllipsis, FontSize = design.FontSize(12) });
+                var remove = new Button { Content = "移除引用片段", IsEnabled = model.CanAttach };
+                remove.Click += (_, _) => model.RemoveQuote(quote); chip.Children.Add(remove);
+                attachments.Children.Add(chip);
+            }
         }
-        attachments.Visibility = model.Attachments.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        attachments.Visibility = model.Attachments.Length > 0 || model.References.Length > 0 || model.Quotes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var referenceSession = model.Snapshot?.SessionId + "/" + model.Snapshot?.ComposerReferences + "/" + model.CanAttach;
+        if (pickerSession != referenceSession) { pickerSession = referenceSession; UpdateSlashHint(); }
         stop.Content = model.Snapshot?.Stopping == true ? "正在停止…" : "停止";
         updatingModels = true;
         try
@@ -439,7 +539,8 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
             models.SelectedItem = models.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string)item.Tag == model.Snapshot?.ModelId);
         }
         finally { updatingModels = false; }
-        models.IsEnabled = !model.Busy && !model.Effort.Busy && model.Snapshot is { Running: false, ReadOnly: false };
+        models.IsEnabled = !model.Busy && !model.Effort.Busy && model.Snapshot is { Running: false, ReadOnly: false }
+            && model.Snapshot.ModelId.StartsWith("acp:", StringComparison.Ordinal) != true && model.Snapshot.AcpAgentId == null;
         updatingEfforts = true;
         try
         {
@@ -462,8 +563,16 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         ToolTipService.SetToolTip(fastMode, "请求优先服务等级，费用以提供方为准。" +
             (model.Snapshot?.FastMode?.Inherited == true ? "当前继承模型默认值。" : "当前使用此会话的覆盖值。"));
         if (!composer.IsEnabled) { commandChoices.Visibility = Visibility.Collapsed; slashHint.Visibility = Visibility.Collapsed; }
+        RenderPlanProgress();
+        RenderQueue();
         RenderTranscript();
+        ApplyReadingTarget();
+        UpdateRunClocks();
+        _ = MaybeShowRunReviewPrompt();
         RenderApprovals();
+        RefreshReading();
+        RefreshAcpCreation();
+        RefreshAcpSettings();
         design.ApplyTypography(this);
         FollowAfterLayout();
         UpdateFollowButton();
@@ -492,7 +601,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         var retained = new HashSet<string>();
         var snapshot = model.ShowingHistory ? model.History : model.Snapshot;
         var keys = snapshot == null ? [] : NativeTranscriptRows.Keys(snapshot);
-        var style = $"{design.Dark}/{design.LightPalette}/{design.DarkPalette}/{design.Typography}";
+        var style = $"{design.Dark}/{design.LightPalette}/{design.DarkPalette}/{design.Typography}/{model.InputPreferences.SelectionPopupEnabled}";
         var older = (model.ShowingHistory ? model.History : model.Snapshot)?.NextBeforeSeq != null;
         if (older || model.ShowingHistory)
         {
@@ -516,22 +625,28 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         {
             var captured = index;
             var key = keys[index];
+            var runRecord = item.Run is { } link ? snapshot?.RunCards?.FirstOrDefault(run => run.Id == link.Id && run.FrameId == snapshot.SessionId && run.Status == link.Status) : null;
+            var terminalRun = item.Run is { } terminal && WorkspaceConversationModel.RunTerminal(terminal.Status);
             retained.Add(key);
-            var fingerprint = JsonSerializer.Serialize(item) + style
-                + (item.Role == "question" ? $"/{model.ShowingHistory}/{model.Snapshot?.ReadOnly}" : "");
+            var fingerprint = JsonSerializer.Serialize(item) + JsonSerializer.Serialize(runRecord) + (runRecord == null ? "" : $"/{model.IsRunHidden(runRecord.Id)}/{model.RunBusy(runRecord.Id)}/{model.RunError(runRecord.Id)}/{model.RunReadError(runRecord.Id)}/{model.CanCancelRun(runRecord)}") + style + $"/{snapshot?.HistoryState != null}"
+                + (snapshot == null ? "" : JsonSerializer.Serialize(model.HistoryTurn(snapshot, captured)))
+                + (item.Role == "plan" ? $"/{model.ShowingHistory}/{model.Snapshot?.Running}/{model.Snapshot?.ReadOnly}/{model.Busy}/{model.ConnectionError}/{model.Snapshot?.PlanMode}/{model.Snapshot?.AcpState?.CurrentMode}/{model.LatestProposal?.Key}"
+                    + (model.LatestProposal is { } proposal ? $"/{model.CanDecidePlan(proposal)}/{model.PlanDecisionUncertain(proposal)}" : "") : "")
+                + (item.Role == "question" ? $"/{model.ShowingHistory}/{model.Snapshot?.ReadOnly}/{model.Busy}/{model.ConnectionError}/"
+                    + JsonSerializer.Serialize(model.Snapshot?.Acp?.QuestionIds) : "");
             if (renderedRows.TryGetValue(key, out var previous) && previous.Fingerprint == fingerprint)
             {
                 desired.Add(previous.Element); index++; continue;
             }
             void Add(FrameworkElement element)
             {
-                if (previous.Element != null && !NativeToolPresentation.RequiresAttention(item))
+                if (previous.Element != null && previous.TerminalRun == terminalRun && (terminalRun || !NativeToolPresentation.RequiresAttention(item)))
                 {
                     var states = Expanders(previous.Element).Select(expander => expander.IsExpanded).ToArray();
                     var expanders = Expanders(element).ToArray();
                     for (var n = 0; n < Math.Min(states.Length, expanders.Length); n++) expanders[n].IsExpanded = states[n];
                 }
-                renderedRows[key] = (fingerprint, element); desired.Add(element);
+                renderedRows[key] = (fingerprint, element, terminalRun); desired.Add(element);
             }
             if (TranscriptPresentation.UsageSummary(item.Role, item.Text) is { } usage)
             {
@@ -542,13 +657,14 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                 continue;
             }
             var card = new StackPanel { Spacing = 8, Padding = new Thickness(16) };
-            var role = item.Role == "user" ? "你" : item.Role == "tool" ? item.ToolName ?? "工具" : item.Role == "reasoning" ? "思考" : "Wisp Science";
+            var role = item.Role == "user" ? "你" : NativeTranscriptActivity.Completion(item) ? "Wisp Science"
+                : item.Role is "tool" or "acp_tool" ? item.ToolName ?? "工具" : item.Role == "reasoning" ? "思考" : "Wisp Science";
             card.Children.Add(new TextBlock { Text = role, FontSize = 12, Foreground = design.Brush("text-muted") });
             foreach (var path in item.Attachments ?? []) card.Children.Add(new TextBlock { Text = "附件 · " + path, TextWrapping = TextWrapping.Wrap });
             if (item.Role == "question" && JsonNode.Parse(item.Text) is JsonObject question)
             {
                 card.Children.Add(new TextBlock { Text = question["question"]?.GetValue<string>() ?? item.Text, TextWrapping = TextWrapping.Wrap });
-                foreach (var option in question["options"]?.AsArray() ?? [])
+                if (!RenderAcpQuestion(card, question)) foreach (var option in question["options"]?.AsArray() ?? [])
                 {
                     var label = option?["label"]?.GetValue<string>() ?? "";
                     var choice = new Button { Content = label, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
@@ -557,10 +673,18 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                     card.Children.Add(choice);
                 }
             }
-            else if (item.Role == "tool")
+            else if (RenderHistoryReview(card, item)) { }
+            else if (RenderPlanProposal(card, item, captured) || RenderPlanTool(card, item) || RenderAcpTool(card, item)) { }
+            else if (item.Role == "tool" && (!NativeTranscriptActivity.Completion(item)
+                || NativeTranscriptActivity.RepeatedCompletion(snapshot!.Items, captured)))
             {
                 var body = new StackPanel { Spacing = 8 };
-                if (!string.IsNullOrEmpty(item.Input)) body.Children.Add(new TextBox { Text = item.Input, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = design.Font(true), FontSize = design.FontSize(12, true) });
+                if (runRecord != null && (item.Run?.OwnerIndex == null || item.Run.OwnerIndex == captured))
+                {
+                    var embedded = WorkspaceConversationModel.RunTerminal(runRecord.Status) && item.Run?.OwnerIndex != null;
+                    if (embedded) body.Children.Add(InlineRunCard(runRecord, true));
+                    else if (!model.IsRunHidden(runRecord.Id)) card.Children.Add(InlineRunCard(runRecord, false));
+                }
                 if (TranscriptPresentation.ToolImagePath(item.Text) is { } imagePath && File.Exists(imagePath))
                 {
                     try
@@ -573,18 +697,23 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                     }
                     catch { }
                 }
-                body.Children.Add(new TextBox { Text = item.Text, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = design.Font(true), FontSize = design.FontSize(12, true) });
+                if (item.Run != null) body.Children.Add(RawToolDetails(item));
+                else
+                {
+                    if (!string.IsNullOrEmpty(item.Input)) body.Children.Add(ToolText(item.Input));
+                    body.Children.Add(ToolText(item.Text));
+                }
                 var heading = new StackPanel { Spacing = 4 };
                 heading.Children.Add(new TextBlock { Text = NativeToolPresentation.Heading(item),
                     Foreground = design.Brush(NativeToolPresentation.IsFailure(item) ? "clay-strong" : "text-muted") });
                 if (item.Run is { } run) heading.Children.Add(new TextBlock { Text = "Run · " + run.Id,
                     TextWrapping = TextWrapping.Wrap, Foreground = design.Brush("text-muted"), FontSize = design.FontSize(12) });
-                if (!string.IsNullOrWhiteSpace(item.Text)) heading.Children.Add(new TextBlock {
-                    Text = item.Text, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
+                if (NativeToolPresentation.Preview(item) is { Length: > 0 } preview) heading.Children.Add(new TextBlock {
+                    Text = preview, MaxLines = 2, TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
                     Foreground = design.Brush("text-muted"), FontSize = design.FontSize(12) });
                 card.Children.Add(new Expander { Header = heading, HorizontalAlignment = HorizontalAlignment.Stretch,
                     HorizontalContentAlignment = HorizontalAlignment.Stretch, Content = body,
-                    IsExpanded = NativeToolPresentation.RequiresAttention(item) });
+                    IsExpanded = NativeToolPresentation.InitiallyExpanded(item, captured) });
                 if (item.Run is { } linkedRun && openRun is not null)
                 {
                     var detail = MessageAction("查看运行详情");
@@ -594,7 +723,9 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
             }
             else
             {
-                card.Children.Add(TranscriptView.Create(new BrowserMessage(captured, item.Role, item.Text, item.ToolName), design));
+                var message = TranscriptView.Create(new BrowserMessage(captured, item.Role, item.Text, item.ToolName), design);
+                if (snapshot != null) AttachSelectionActions(message, snapshot, captured);
+                card.Children.Add(message);
                 var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
                 var copy = MessageAction("复制");
                 copy.Click += (_, _) =>
@@ -603,10 +734,14 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                     catch { }
                 };
                 var quoteButton = MessageAction("引用");
-                quoteButton.Click += (_, _) => quote(item.Text);
+                quoteButton.Click += (_, _) => { if (snapshot != null) AddQuote(snapshot, captured, item.Text); };
+                var sideQuote = MessageAction("辅助聊天");
+                sideQuote.Click += (_, _) => quote(snapshot != null && NativeComposerQuote.From(snapshot, captured, item.Text) is { } source ? source.Message : item.Text);
                 var star = MessageAction("收藏");
                 star.Click += async (_, _) => await model.SaveSelectionAsync(item.Text, lifetime.Token);
-                actions.Children.Add(copy); actions.Children.Add(quoteButton); actions.Children.Add(star); card.Children.Add(actions);
+                actions.Children.Add(copy); actions.Children.Add(quoteButton); actions.Children.Add(sideQuote); actions.Children.Add(star);
+                if (snapshot != null) AddHistoryActions(actions, snapshot, captured);
+                card.Children.Add(actions);
             }
             Add(new Border
             {
@@ -621,7 +756,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         var retainedGroups = new HashSet<string>();
         if (snapshot != null)
         {
-            foreach (var group in NativeTranscriptActivity.Groups(snapshot.Items, snapshot.Running || snapshot.Stopping))
+            foreach (var group in NativeTranscriptActivity.Groups(snapshot.Items, snapshot.Running || snapshot.Stopping, openRun != null))
             {
                 var groupKey = keys[group.Start];
                 retainedGroups.Add(groupKey);
@@ -632,10 +767,24 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
                     disclosure.Button.Click += (_, _) => capturedDisclosure.Update();
                     activityDisclosures[groupKey] = disclosure;
                 }
+                var reviewIds = NativeTranscriptActivity.ReviewRuns(snapshot.Items, group);
+                if (!disclosure.ReviewIds.SequenceEqual(reviewIds))
+                {
+                    disclosure.ReviewIds = reviewIds;
+                    disclosure.Reviews.Children.Clear();
+                    foreach (var id in reviewIds)
+                    {
+                        var review = MessageAction("查看待审阅运行");
+                        ToolTipService.SetToolTip(review, "Run · " + id);
+                        review.Click += (_, _) => openRun?.Invoke(id);
+                        disclosure.Reviews.Children.Add(review);
+                    }
+                }
+                disclosure.Reviews.Visibility = reviewIds.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
                 disclosure.Rows.Clear();
                 for (var row = group.Start; row < group.End; row++) disclosure.Rows.Add(renderedRows[keys[row]].Element);
                 disclosure.Update();
-                desired.Insert(desired.IndexOf(disclosure.Rows[0]), disclosure.Button);
+                desired.Insert(desired.IndexOf(disclosure.Rows[0]), disclosure.Header);
             }
         }
         foreach (var key in activityDisclosures.Keys.Where(key => !retainedGroups.Contains(key)).ToArray()) activityDisclosures.Remove(key);
@@ -645,6 +794,7 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
         if (model.Snapshot?.Running == true && !model.ShowingHistory)
             desired.Add(new TextBlock { Text = model.Snapshot.Stopping ? "正在停止…" : "正在处理…", FontSize = 12, Foreground = design.Brush("text-muted") });
         foreach (var key in renderedRows.Keys.Where(key => !retained.Contains(key)).ToArray()) renderedRows.Remove(key);
+        foreach (var id in runClocks.Keys.Where(id => snapshot?.RunCards?.Any(run => run.Id == id) != true).ToArray()) runClocks.Remove(id);
         // Keep unchanged controls attached: rebuilding their parents would still
         // discard text selection, keyboard focus and nested disclosure state.
         var wanted = desired.ToHashSet();
@@ -693,11 +843,13 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
 
     private void RenderApprovals()
     {
-        var fingerprint = JsonSerializer.Serialize(model.Snapshot?.Approvals) + $"/{model.ShowingHistory}/{model.Busy}/{model.ConnectionError}/{design.Typography}";
+        var fingerprint = JsonSerializer.Serialize(model.Snapshot?.Approvals) + JsonSerializer.Serialize(model.Snapshot?.Acp)
+            + $"/{model.ShowingHistory}/{model.Busy}/{model.ConnectionError}/{model.Snapshot?.ReadOnly}/{design.Typography}";
         if (fingerprint == approvalFingerprint) return;
         approvalFingerprint = fingerprint;
         approvals.Children.Clear();
         if (model.ShowingHistory) return;
+        RenderAcpPermissions();
         foreach (var approval in model.Snapshot?.Approvals ?? [])
         {
             var captured = approval;
@@ -719,8 +871,14 @@ internal sealed partial class NativeConversationPage : UserControl, IDisposable
     public void Dispose()
     {
         if (disposed) return;
+        historyMenu?.Hide(); historyDialog?.Hide();
+        queueMenu?.Hide(); queueDialog?.Hide();
         composerOptions.Hide();
+        selectionFlyout?.Hide(); contextUsageFlyout.Hide();
+        acpCreationMenu?.Hide();
         optionSubmenu.Hide();
-        disposed = true; lifetime.Cancel(); model.Changed -= Refresh; model.Effort.Changed -= Refresh; model.Options.Changed -= Refresh; design.TypographyChanged -= Refresh; model.Pause(); lifetime.Dispose();
+        disposed = true; lifetime.Cancel(); model.Changed -= Refresh; model.Effort.Changed -= Refresh; model.Options.Changed -= Refresh;
+        if (readingTargetLayout != null) transcript.LayoutUpdated -= readingTargetLayout;
+        model.ReferencePicker.Changed -= RenderComposerChoices; design.TypographyChanged -= Refresh; model.Pause(); lifetime.Dispose();
     }
 }

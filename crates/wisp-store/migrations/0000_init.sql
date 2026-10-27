@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS folders (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name       TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_folders_project ON folders(project_id);
 
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS frames (
     exploration_id  TEXT,
     folder_id       TEXT REFERENCES folders(id) ON DELETE SET NULL,
     branched_from   TEXT,
+    dispatched_from TEXT,
     branch_point_user_index INTEGER,
     branch_point_kind TEXT,
     pinned          INTEGER NOT NULL DEFAULT 0,
@@ -406,7 +408,9 @@ CREATE TABLE IF NOT EXISTS runs (
     harvested_at       INTEGER,
     cleaned_at         INTEGER,
     cleanup_error      TEXT,
-    logs_path          TEXT
+    logs_path          TEXT,
+    background_requested_at INTEGER,
+    background_notified_at  INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_runs_project ON runs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_runs_context ON runs(context_id);
@@ -969,3 +973,14 @@ CREATE TABLE IF NOT EXISTS session_file_operations (
     committed_at INTEGER NOT NULL,
     PRIMARY KEY(operation_id, role)
 );
+
+CREATE TABLE IF NOT EXISTS server_turns (
+    frame_id TEXT NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('accepted','completed','failed','interrupted')),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(frame_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS ix_server_turns_frame ON server_turns(frame_id, created_at);

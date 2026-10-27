@@ -566,12 +566,15 @@ fn validate_connection_name(label: &str, value: &str) -> Result<(), String> {
     if value.starts_with('-') {
         return Err(format!("{label} must not start with '-'"));
     }
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
+    // '@' is legal in an SSH user (`user@tenant` HPC gateways): ssh, scp and rsync
+    // all split `user@host` on the last '@'. Aliases and host addresses never carry one.
+    let allow_at = label == "SSH user";
+    if !value.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') || (allow_at && c == '@')
+    }) {
+        let at = if allow_at { ", '@'" } else { "" };
         return Err(format!(
-            "{label} may contain only ASCII letters, digits, '.', '_' and '-'"
+            "{label} may contain only ASCII letters, digits, '.', '_'{at} and '-'"
         ));
     }
     Ok(())
@@ -663,6 +666,8 @@ observe or cancel it through the Runs control plane. Remote paths are not local 
 paths. To watch a submitted Run or wait for its result, call `monitor_run` \
 instead of repeatedly calling `get_run`. If `monitor_run` returns `wait_interrupted`, \
 the Run is still running: answer the user, then call `monitor_run` again with the same id. \
+If it returns `wait_backgrounded`, the user moved the Run to the background: do not monitor it \
+again; Wisp posts its completion to the conversation. \
 Do not resubmit. For persistent interactive analysis, call `python` or `r` with the \
 matching `context_id`; omitting it uses the default analysis environment below when one is \
 configured, otherwise `local`. Interpreter paths come from \
@@ -1211,6 +1216,37 @@ pub async fn copy_session_default_execution_context(
     Ok(())
 }
 
+/// Inherit the source's enabled servers and default environment. Replace the
+/// destination selection so a global default attached at frame creation does
+/// not leak into a branch of a conversation with a different environment.
+pub async fn copy_session_execution_environment(
+    store: &wisp_store::Store,
+    from_frame_id: &str,
+    to_frame_id: &str,
+) -> Result<(), String> {
+    let source = store
+        .list_session_execution_context_ids(from_frame_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let target = store
+        .list_session_execution_context_ids(to_frame_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    for context_id in target.iter().filter(|id| !source.contains(id)) {
+        store
+            .set_session_execution_context_enabled(to_frame_id, context_id, false)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    for context_id in source.iter().filter(|id| !target.contains(id)) {
+        store
+            .set_session_execution_context_enabled(to_frame_id, context_id, true)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    copy_session_default_execution_context(store, from_frame_id, to_frame_id).await
+}
+
 /// Pin a new conversation to the current global default (or local).
 pub async fn snapshot_session_default_from_global(
     store: &wisp_store::Store,
@@ -1732,6 +1768,34 @@ Host -unsafe bad/name !negated
     }
 
     #[test]
+    fn ssh_user_may_contain_at_for_user_tenant_gateways() {
+        // #1465: `user@tenant` logins must reach ssh intact; OpenSSH splits on the last '@'.
+        let connection = SshConnection {
+            alias: "gateway".into(),
+            host_name: Some("gateway.example.com".into()),
+            user: Some("myuser@mytenant".into()),
+            port: Some(2222),
+            identity_file: None,
+            auth_method: SshAuthMethod::Password,
+        };
+        assert_eq!(
+            connection.target().unwrap(),
+            "myuser@mytenant@gateway.example.com"
+        );
+        assert_eq!(
+            connection.ssh_args().unwrap().last().unwrap(),
+            "myuser@mytenant@gateway.example.com"
+        );
+        // '@' is only a user-name character, never an alias or host address one.
+        let host_with_at = SshConnection {
+            host_name: Some("tenant@gateway.example.com".into()),
+            user: None,
+            ..connection
+        };
+        assert!(host_with_at.target().is_err());
+    }
+
+    #[test]
     fn ssh_connection_rejects_unsafe_names_and_identity_paths() {
         for alias in ["", "-proxy", "gpu box", "gpu/box", "güp"] {
             let connection = SshConnection {
@@ -1744,7 +1808,7 @@ Host -unsafe bad/name !negated
             };
             assert!(connection.ssh_args().is_err(), "accepted alias {alias:?}");
         }
-        for user in ["", "-root", "user@host", "用户"] {
+        for user in ["", "-root", "user name", "用户"] {
             let connection = SshConnection {
                 alias: "gpu-box".into(),
                 host_name: None,
@@ -2060,6 +2124,91 @@ Host -unsafe bad/name !negated
         );
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn copied_session_environment_replaces_global_defaults_and_stays_independent() {
+        for (default, enabled) in [
+            (Some("ssh:gpu"), vec!["ssh:gpu", "wsl:Ubuntu"]),
+            (Some("wsl:Ubuntu"), vec!["ssh:gpu", "wsl:Ubuntu"]),
+            (Some("local"), vec!["ssh:gpu", "wsl:Ubuntu"]),
+            (None, vec!["ssh:gpu", "wsl:Ubuntu"]),
+            (Some("local"), vec![]),
+        ] {
+            let (store, path) = session_default_store().await;
+            store
+                .upsert_execution_context(
+                    &wisp_store::ExecutionContext::new("wsl:Ubuntu", "Ubuntu").unwrap(),
+                )
+                .await
+                .unwrap();
+            for context_id in &enabled {
+                store
+                    .set_session_execution_context_enabled("f", context_id, true)
+                    .await
+                    .unwrap();
+            }
+            store
+                .set_session_default_execution_context("f", default)
+                .await
+                .unwrap();
+            // A normal new frame would pick up this different global server.
+            store
+                .set_setting(DEFAULT_EXECUTION_CONTEXT_KEY, "ssh:cpu")
+                .await
+                .unwrap();
+            store.create_frame("g", "p", "OPERON", "m").await.unwrap();
+            snapshot_session_default_from_global(&store, "g")
+                .await
+                .unwrap();
+
+            copy_session_execution_environment(&store, "f", "g")
+                .await
+                .unwrap();
+            assert_eq!(
+                store.session_default_execution_context("g").await.unwrap(),
+                default.map(str::to_string)
+            );
+            assert_eq!(
+                store.list_session_execution_context_ids("g").await.unwrap(),
+                enabled
+            );
+            // Server selection and the default remain saved across a reopen.
+            let reopened = wisp_store::Store::open(&path).await.unwrap();
+            assert_eq!(
+                reopened
+                    .session_default_execution_context("g")
+                    .await
+                    .unwrap(),
+                default.map(str::to_string)
+            );
+            assert_eq!(
+                reopened
+                    .list_session_execution_context_ids("g")
+                    .await
+                    .unwrap(),
+                enabled
+            );
+            store
+                .set_session_execution_context_enabled("g", "ssh:gpu", false)
+                .await
+                .unwrap();
+            assert_eq!(
+                store.list_session_execution_context_ids("f").await.unwrap(),
+                enabled
+            );
+            assert_eq!(
+                store.session_default_execution_context("f").await.unwrap(),
+                default.map(str::to_string)
+            );
+            assert_eq!(
+                stored_default_execution_context(&store).await.as_deref(),
+                Some("ssh:cpu")
+            );
+            drop(reopened);
+            drop(store);
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[tokio::test]

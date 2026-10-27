@@ -9,15 +9,21 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use url::Url;
 
 pub const MAX_RELAY_BODY_BYTES: usize = 256 * 1024 * 1024;
+/// Control-plane JSON (head / revision / commit) is small; blobs use the full limit.
+const MAX_RELAY_JSON_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RELAY_ERROR_BYTES: usize = 4 * 1024;
 
 #[derive(Clone)]
 pub struct RelayHttpState {
     relay: FileRelay,
     bearer_token: Arc<str>,
+    pub(crate) remote: Arc<crate::remote::RemoteHub>,
+    /// Present only when the operator enabled Wisp Lab.
+    pub(crate) lab: Option<Arc<crate::lab::Lab>>,
 }
 
 impl RelayHttpState {
@@ -29,7 +35,15 @@ impl RelayHttpState {
         Ok(Self {
             relay,
             bearer_token: bearer_token.into(),
+            remote: Default::default(),
+            lab: None,
         })
+    }
+
+    /// Turns on the `/v1/lab/*` routes, which answer 404 otherwise.
+    pub fn with_lab(mut self, lab: crate::lab::Lab) -> Self {
+        self.lab = Some(Arc::new(lab));
+        self
     }
 }
 
@@ -46,11 +60,29 @@ pub fn relay_router(state: RelayHttpState) -> Router {
             get(get_blob).head(head_blob).put(put_blob),
         )
         .route("/v1/projects/{project_id}/commit", post(commit))
+        .route("/remote", get(crate::remote::page))
+        .route("/remote.js", get(crate::remote::script))
+        .route("/remote.webmanifest", get(crate::remote::manifest))
+        .route(
+            "/remote-icon-192.png",
+            get(|| crate::remote::icon(crate::remote::ICON_192)),
+        )
+        .route(
+            "/remote-icon-512.png",
+            get(|| crate::remote::icon(crate::remote::ICON_512)),
+        )
+        .route(
+            "/remote-touch-icon.png",
+            get(|| crate::remote::icon(crate::remote::TOUCH_ICON)),
+        )
+        .route("/v1/remote/host/{sid}", get(crate::remote::host_socket))
+        .route("/v1/remote/client/{sid}", get(crate::remote::client_socket))
+        .merge(crate::lab::routes())
         .layer(DefaultBodyLimit::max(MAX_RELAY_BODY_BYTES))
         .with_state(state)
 }
 
-fn authorized(headers: &HeaderMap, state: &RelayHttpState) -> bool {
+pub(crate) fn authorized(headers: &HeaderMap, state: &RelayHttpState) -> bool {
     headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -65,7 +97,7 @@ fn authorized(headers: &HeaderMap, state: &RelayHttpState) -> bool {
         })
 }
 
-fn unauthorized() -> Response {
+pub(crate) fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
 }
 
@@ -166,6 +198,18 @@ async fn commit(
     if !authorized(&headers, &state) {
         return unauthorized();
     }
+    if let Some(lab) = &state.lab {
+        if !lab
+            .may_commit(&project_id, crate::lab::member_key(&headers))
+            .await
+        {
+            return (
+                StatusCode::FORBIDDEN,
+                "only the lab leader can update the lab knowledge base",
+            )
+                .into_response();
+        }
+    }
     match state.relay.commit(&project_id, request).await {
         Ok(CommitOutcome::Committed(head)) => Json(head).into_response(),
         Ok(CommitOutcome::Conflict(head)) => (StatusCode::CONFLICT, Json(head)).into_response(),
@@ -177,28 +221,15 @@ async fn commit(
 pub struct HttpRelay {
     base_url: Url,
     bearer_token: Arc<str>,
+    /// Sent as `x-wisp-member` when this computer belongs to the relay's lab.
+    member_key: Option<Arc<str>>,
     client: reqwest::Client,
 }
 
 impl HttpRelay {
     pub fn new(base_url: &str, bearer_token: impl Into<String>) -> Result<Self> {
-        let mut base_url = Url::parse(base_url.trim()).context("invalid relay URL")?;
-        let secure = base_url.scheme() == "https";
-        let local_http = base_url.scheme() == "http"
-            && base_url
-                .host_str()
-                .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
-        if !secure && !local_http {
-            anyhow::bail!("relay URL must use HTTPS (HTTP is allowed only for localhost)");
-        }
-        if base_url.cannot_be_a_base() {
-            anyhow::bail!("invalid relay base URL");
-        }
-        base_url.set_query(None);
-        base_url.set_fragment(None);
-        if !base_url.path().ends_with('/') {
-            base_url.set_path(&format!("{}/", base_url.path()));
-        }
+        // HTTPS, or HTTP to this computer or a private network address.
+        let base_url = crate::remote::relay_base(base_url)?;
         let bearer_token = bearer_token.into();
         if bearer_token.trim().is_empty() {
             anyhow::bail!("relay token is not configured");
@@ -206,15 +237,53 @@ impl HttpRelay {
         Ok(Self {
             base_url,
             bearer_token: bearer_token.into(),
-            client: reqwest::Client::new(),
+            member_key: None,
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .read_timeout(Duration::from_secs(60))
+                .build()
+                .context("failed to build relay HTTP client")?,
         })
+    }
+
+    /// Identifies this computer as a lab member. Lab calls need it, and so
+    /// does the leader's commit to the lab knowledge base.
+    pub fn with_lab_member(mut self, member_key: impl Into<String>) -> Self {
+        self.member_key = Some(member_key.into().into());
+        self
+    }
+
+    /// Buffer at most `cap` bytes. Checked per chunk, so a chunked or lying
+    /// `Content-Length` response from a hostile relay cannot exhaust memory.
+    pub(crate) async fn bounded_body(
+        mut response: reqwest::Response,
+        cap: usize,
+    ) -> Result<Vec<u8>> {
+        if response.content_length().is_some_and(|n| n > cap as u64) {
+            anyhow::bail!("relay response exceeds the client size limit");
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > cap {
+                anyhow::bail!("relay response exceeds the client size limit");
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+
+    pub(crate) async fn bounded_json<T: serde::de::DeserializeOwned>(
+        response: reqwest::Response,
+    ) -> Result<T> {
+        let body = Self::bounded_body(response, MAX_RELAY_JSON_BYTES).await?;
+        serde_json::from_slice(&body).context("relay returned malformed JSON")
     }
 
     fn endpoint(&self, path: &str) -> Result<Url> {
         self.base_url.join(path).context("invalid relay endpoint")
     }
 
-    fn component(value: &str, name: &str) -> Result<()> {
+    pub(crate) fn component(value: &str, name: &str) -> Result<()> {
         if value.is_empty()
             || value.len() > 128
             || !value
@@ -237,16 +306,27 @@ impl HttpRelay {
         Ok(())
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> Result<reqwest::RequestBuilder> {
-        Ok(self
+    pub(crate) fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        let request = self
             .client
             .request(method, self.endpoint(path)?)
-            .bearer_auth(&*self.bearer_token))
+            .bearer_auth(&*self.bearer_token);
+        Ok(match &self.member_key {
+            Some(key) => request.header(crate::lab::LAB_MEMBER_HEADER, &**key),
+            None => request,
+        })
     }
 
     async fn response_error(response: reqwest::Response) -> anyhow::Error {
         let status = response.status();
-        let detail = response.text().await.unwrap_or_default();
+        let detail = Self::bounded_body(response, MAX_RELAY_ERROR_BYTES)
+            .await
+            .map(|body| String::from_utf8_lossy(&body).into_owned())
+            .unwrap_or_default();
         anyhow::anyhow!("relay request failed ({status}): {}", detail.trim())
     }
 }
@@ -268,7 +348,7 @@ impl SyncTransport for HttpRelay {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        Ok(Some(response.json().await?))
+        Ok(Some(Self::bounded_json(response).await?))
     }
 
     async fn revision(&self, project_id: &str, revision_id: &str) -> Result<SyncRevision> {
@@ -284,7 +364,7 @@ impl SyncTransport for HttpRelay {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        Ok(response.json().await?)
+        Self::bounded_json(response).await
     }
 
     async fn blob_exists(&self, blob_id: &str) -> Result<bool> {
@@ -309,17 +389,7 @@ impl SyncTransport for HttpRelay {
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_RELAY_BODY_BYTES as u64)
-        {
-            anyhow::bail!("relay blob exceeds the client size limit");
-        }
-        let bytes = response.bytes().await?;
-        if bytes.len() > MAX_RELAY_BODY_BYTES {
-            anyhow::bail!("relay blob exceeds the client size limit");
-        }
-        Ok(bytes.to_vec())
+        Self::bounded_body(response, MAX_RELAY_BODY_BYTES).await
     }
 
     async fn put_blob(&self, blob_id: &str, bytes: Vec<u8>) -> Result<()> {
@@ -349,12 +419,14 @@ impl SyncTransport for HttpRelay {
             .send()
             .await?;
         if response.status() == reqwest::StatusCode::CONFLICT {
-            return Ok(CommitOutcome::Conflict(response.json().await?));
+            return Ok(CommitOutcome::Conflict(Self::bounded_json(response).await?));
         }
         if !response.status().is_success() {
             return Err(Self::response_error(response).await);
         }
-        Ok(CommitOutcome::Committed(response.json().await?))
+        Ok(CommitOutcome::Committed(
+            Self::bounded_json(response).await?,
+        ))
     }
 }
 
@@ -368,7 +440,12 @@ mod tests {
     fn client_requires_tls_except_for_loopback() {
         assert!(HttpRelay::new("https://relay.example.test", "token").is_ok());
         assert!(HttpRelay::new("http://127.0.0.1:8787", "token").is_ok());
+        assert!(HttpRelay::new("http://[::1]:8787", "token").is_ok());
+        // A relay on the lab's own network may be reached without TLS.
+        assert!(HttpRelay::new("http://192.168.1.20:8787", "token").is_ok());
+        assert!(HttpRelay::new("http://10.20.30.40:8787/wisp", "token").is_ok());
         assert!(HttpRelay::new("http://relay.example.test", "token").is_err());
+        assert!(HttpRelay::new("http://8.8.8.8:8787", "token").is_err());
         assert!(HttpRelay::new("https://relay.example.test", "").is_err());
     }
 
@@ -388,6 +465,46 @@ mod tests {
             "Bearer correct-token".parse().unwrap(),
         );
         assert!(authorized(&headers, &state));
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    async fn the_remote_page_installs_with_icons_the_relay_actually_serves() {
+        let root = std::env::temp_dir().join(format!("wisp-http-pwa-{}", uuid::Uuid::new_v4()));
+        let relay = FileRelay::open(&root).await.unwrap();
+        let app = relay_router(RelayHttpState::new(relay, "token").unwrap());
+        let fetch = |path: String| {
+            let app = app.clone();
+            async move {
+                let request = Request::builder().uri(path).body(Body::empty()).unwrap();
+                let response = app.oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let kind = response.headers()["content-type"]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX);
+                (kind, body.await.unwrap())
+            }
+        };
+        let (kind, body) = fetch("/remote.webmanifest".into()).await;
+        assert_eq!(kind, "application/manifest+json");
+        let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(manifest["display"], "standalone");
+        let icons = manifest["icons"].as_array().unwrap();
+        assert_eq!(icons.len(), 2);
+        for icon in icons {
+            let (kind, png) = fetch(format!("/{}", icon["src"].as_str().unwrap())).await;
+            assert_eq!(kind, "image/png");
+            // Width and height from the PNG header match what the manifest claims.
+            let side = u32::from_be_bytes(png[16..20].try_into().unwrap());
+            assert_eq!(side, u32::from_be_bytes(png[20..24].try_into().unwrap()));
+            assert_eq!(icon["sizes"], format!("{side}x{side}"));
+        }
+        let page = String::from_utf8(fetch("/remote".into()).await.1.to_vec()).unwrap();
+        assert!(page.contains(r#"<link rel="manifest" href="remote.webmanifest">"#));
+        let (kind, _) = fetch("/remote-touch-icon.png".into()).await;
+        assert_eq!(kind, "image/png");
         let _ = tokio::fs::remove_dir_all(root).await;
     }
 

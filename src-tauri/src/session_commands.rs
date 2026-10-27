@@ -34,6 +34,133 @@ pub(super) async fn new_session(
     Ok(id)
 }
 
+/// Where a conversation branch forks off its source: a visual user turn and
+/// whether the fork keeps that turn's reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BranchCheckpointKind {
+    /// The cut is just before the user turn; the branch starts with the turn's
+    /// predecessor as its last message.
+    BeforeUser,
+    /// The branch keeps the user turn and its reply.
+    AfterResponse,
+}
+
+impl BranchCheckpointKind {
+    /// The wire form (`frames.branch_point_kind`); `None` means `after_response`.
+    pub(crate) fn parse(raw: Option<&str>) -> Result<Self, String> {
+        match raw.unwrap_or("after_response") {
+            "before_user" => Ok(Self::BeforeUser),
+            "after_response" => Ok(Self::AfterResponse),
+            _ => Err("Invalid conversation branch checkpoint kind.".into()),
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::BeforeUser => "before_user",
+            Self::AfterResponse => "after_response",
+        }
+    }
+}
+
+/// The in-memory, session-scoped permission state a branch inherits from its
+/// source (`approval_commands::copy_session_permissions`).
+pub(crate) struct BranchPermissions<'a> {
+    pub(crate) approval_grants: &'a StdMutex<ApprovalGrants>,
+    pub(crate) full_permission_sessions: &'a StdRwLock<HashSet<String>>,
+}
+
+impl BranchPermissions<'_> {
+    pub(crate) fn of(state: &AppState) -> BranchPermissions<'_> {
+        BranchPermissions {
+            approval_grants: &state.approval_grants,
+            full_permission_sessions: &state.full_permission_sessions,
+        }
+    }
+}
+
+/// Create a conversation branch of `source` in `project_id` and return the new
+/// frame id. The branch holds the source's transcript up to the checkpoint
+/// (`user_index` `None`: the source's last visual user turn), the source's
+/// model settings, execution environment and session permissions, and the
+/// branch point that nests it under the source in the sidebar.
+///
+/// This is the kernel shared by the `/fork` command and agent-opened
+/// branches; it needs no window. Callers decide whether a branch may be
+/// created here at all (a branch of a branch, a branch inside an exploration,
+/// a frozen exploration round): this function only builds one.
+pub(crate) async fn create_branch_from(
+    store: &Store,
+    permissions: BranchPermissions<'_>,
+    project_id: &str,
+    source: &str,
+    user_index: Option<usize>,
+    checkpoint_kind: BranchCheckpointKind,
+    title: Option<&str>,
+) -> Result<String, String> {
+    let id = create_session_frame(store, project_id).await?;
+    let checkpoint_user_index = match user_index {
+        Some(index) => index,
+        None => last_user_index(store, source).await?,
+    };
+    let (epoch, keep_seq) = resolve_visual_keep(
+        store,
+        source,
+        checkpoint_user_index,
+        checkpoint_kind == BranchCheckpointKind::AfterResponse,
+    )
+    .await?;
+    store
+        .set_session_branch_point(&id, source, checkpoint_user_index, checkpoint_kind.as_str())
+        .await
+        .map_err(|error| error.to_string())?;
+    models::copy_session_model_settings(store, source, &id, project_id).await?;
+    ssh_hosts::copy_session_execution_environment(store, source, &id).await?;
+    let msgs = store
+        .load_messages_in_epoch(source, epoch)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    for (idx, (_, msg)) in msgs.iter().filter(|(seq, _)| *seq <= keep_seq).enumerate() {
+        store
+            .append_message(&id, idx as i64 + 1, msg)
+            .await
+            .map_err(|e| format!("{e}"))?;
+    }
+    approval_commands::copy_session_permissions(
+        permissions.approval_grants,
+        permissions.full_permission_sessions,
+        source,
+        &id,
+    )?;
+    if let Some(t) = branch_title(title) {
+        let _ = store.rename_session(&id, project_id, &t).await;
+    }
+    Ok(id)
+}
+
+/// Why `source` cannot be branched right now, if it cannot. Shared by the
+/// `/fork` command and the `open_branch` tool so both refuse the same cases.
+pub(crate) async fn require_branchable(store: &Store, source: &str) -> Result<(), String> {
+    let scope = store
+        .frame_state_scope(source)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Session state scope was not found.".to_string())?;
+    exploration_commands::require_writable_scope(store, &scope).await?;
+    if store
+        .session_branch_state(source)
+        .await
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err("Conversation branches cannot be branched again.".into());
+    }
+    if matches!(scope, wisp_store::StateScope::Exploration { .. }) {
+        return Err("Conversation branches cannot be created inside an exploration.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub(super) async fn branch_session(
     state: State<'_, AppState>,
@@ -51,106 +178,38 @@ pub(super) async fn branch_session(
         .await?
         .0;
     let _project_activity = state.begin_project_activity(&ap.id)?;
-    if let Some(source) = session_id.as_deref().filter(|s| !s.is_empty()) {
-        let scope = state
-            .store
-            .frame_state_scope(source)
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "Session state scope was not found.".to_string())?;
-        exploration_commands::require_writable_scope(&state.store, &scope).await?;
-        if state
-            .store
-            .session_branch_state(source)
-            .await
-            .map_err(|error| error.to_string())?
-            .is_some()
-        {
-            return Err("Conversation branches cannot be branched again.".into());
-        }
-        if matches!(
-            state
-                .store
-                .frame_state_scope(source)
-                .await
-                .map_err(|error| error.to_string())?,
-            Some(wisp_store::StateScope::Exploration { .. })
-        ) {
-            return Err("Conversation branches cannot be created inside an exploration.".into());
-        }
+    let source = session_id.as_deref().filter(|s| !s.is_empty());
+    if let Some(source) = source {
+        require_branchable(&state.store, source).await?;
     }
     // Copying conversation history does not change the frozen workspace.
     // The branched frame receives the same read-only project-tool restriction
     // as any other non-source mainline conversation during an active round.
-    let id = create_session_frame(&state.store, &ap.id).await?;
-    if let Some(source) = session_id.as_deref().filter(|s| !s.is_empty()) {
-        // A branch is a continuation of the source conversation's identity.
-        // Prefer that frozen Specialist over a newer project default.
+    let id = match source {
+        Some(source) => {
+            create_branch_from(
+                &state.store,
+                BranchPermissions::of(&state),
+                &ap.id,
+                source,
+                user_index,
+                BranchCheckpointKind::parse(checkpoint_kind.as_deref())?,
+                title.as_deref(),
+            )
+            .await?
+        }
+        None => {
+            let id = create_session_frame(&state.store, &ap.id).await?;
+            if let Some(t) = branch_title(title.as_deref()) {
+                let _ = state.store.rename_session(&id, &ap.id, &t).await;
+            }
+            id
+        }
+    };
+    if let Some(source) = source {
         if let Some(specialist_id) = specialists::frame_specialist_id(&state.store, source).await {
             specialists::set_frame_specialist(&state.store, &id, &specialist_id).await?;
         }
-        let checkpoint_kind = checkpoint_kind.as_deref().unwrap_or("after_response");
-        if !matches!(checkpoint_kind, "before_user" | "after_response") {
-            return Err("Invalid conversation branch checkpoint kind.".into());
-        }
-        let checkpoint_user_index = match user_index {
-            Some(index) => index,
-            None => last_user_index(&state.store, source).await?,
-        };
-        let (epoch, keep_seq) = resolve_visual_keep(
-            &state.store,
-            source,
-            checkpoint_user_index,
-            checkpoint_kind == "after_response",
-        )
-        .await?;
-        state
-            .store
-            .set_session_branch_point(&id, source, checkpoint_user_index, checkpoint_kind)
-            .await
-            .map_err(|error| error.to_string())?;
-        let model_id = models::session_profile_id(&state.store, source).await;
-        state
-            .store
-            .set_frame_model(&id, &ap.id, &model_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        let reasoning_effort = state
-            .store
-            .frame_reasoning_effort(source)
-            .await
-            .map_err(|error| error.to_string())?;
-        state
-            .store
-            .set_frame_reasoning_effort(&id, &ap.id, reasoning_effort.as_deref())
-            .await
-            .map_err(|error| error.to_string())?;
-        let service_tier = state
-            .store
-            .frame_service_tier(source)
-            .await
-            .map_err(|error| error.to_string())?;
-        state
-            .store
-            .set_frame_service_tier(&id, &ap.id, service_tier.as_deref())
-            .await
-            .map_err(|error| error.to_string())?;
-        ssh_hosts::copy_session_default_execution_context(&state.store, source, &id).await?;
-        let msgs = state
-            .store
-            .load_messages_in_epoch(source, epoch)
-            .await
-            .map_err(|e| format!("{e}"))?;
-        for (idx, (_, msg)) in msgs.iter().filter(|(seq, _)| *seq <= keep_seq).enumerate() {
-            state
-                .store
-                .append_message(&id, idx as i64 + 1, msg)
-                .await
-                .map_err(|e| format!("{e}"))?;
-        }
-    }
-    if let Some(t) = branch_title(title.as_deref()) {
-        let _ = state.store.rename_session(&id, &ap.id, &t).await;
     }
     state.set_active(window.label(), ap);
     state.set_active_frame(window.label(), Some(id.clone()));
@@ -304,6 +363,302 @@ pub(super) async fn summarize_session_branch_merge(
         return Err("Branch summary model returned an empty summary.".into());
     }
     Ok(summary.to_string())
+}
+
+/// One-shot handoff note for opening a fresh session: the head-epoch context
+/// (checkpoint plus retained turns) rendered the same way semantic compaction
+/// renders its summary input, sent to the session model. Read-only: the
+/// session's context and history are not touched.
+#[tauri::command]
+pub(super) async fn generate_session_handoff(
+    state: State<'_, AppState>,
+    id: String,
+    instruction: Option<String>,
+) -> Result<String, String> {
+    let frame_id = id.trim().to_string();
+    if frame_id.is_empty() {
+        return Err("No session to hand off.".into());
+    }
+    if let Some(instruction) = instruction.as_deref() {
+        if instruction.chars().count() > 8_000 {
+            return Err("Handoff instruction is too long.".into());
+        }
+    }
+    if session_branch_is_busy(&state, &[frame_id.clone()]).await {
+        return Err("Wait for the current turn to finish before generating a handoff.".into());
+    }
+    if state
+        .store
+        .get_acp_session(&frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err("ACP conversations cannot generate a handoff summary.".into());
+    }
+    let runtime = state.sessions.lock().await.get(&frame_id).cloned();
+    if let Some(runtime) = runtime.as_deref() {
+        flush_session_events(&runtime.ui_event_writer).await?;
+    }
+    let messages = state
+        .store
+        .load_messages(&frame_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let request = wisp_core::ContextManager::handoff_request(&messages, instruction.as_deref())?;
+    let (
+        provider,
+        api_url,
+        model,
+        api_key,
+        profile_max_tokens,
+        reasoning_effort,
+        service_tier,
+        user_agent,
+        send_user_agent,
+        send_session_id,
+        session_header_name,
+    ) = load_session_settings(&state.store, &frame_id).await;
+    let config = build_provider_config(
+        &provider,
+        &api_url,
+        &api_key,
+        &model,
+        branch_summary_output_budget(
+            profile_max_tokens,
+            crate::model_catalog::output_tokens(&provider, &api_url, &model),
+        ),
+        &reasoning_effort,
+        &service_tier,
+        &user_agent,
+        send_user_agent,
+        send_session_id,
+        &session_header_name,
+        Some(&frame_id),
+    )?;
+    let completion = tokio::time::timeout(
+        BRANCH_SUMMARY_TIMEOUT,
+        wisp_llm::build(config).complete(&request, &[]),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Handoff model timed out after {} seconds.",
+            BRANCH_SUMMARY_TIMEOUT.as_secs()
+        )
+    })?
+    .map_err(|error| format!("Handoff model failed: {error}"))?;
+    let summary = completion.content.trim();
+    if summary.is_empty() {
+        return Err("Handoff model returned an empty note.".into());
+    }
+    Ok(summary.to_string())
+}
+
+/// Render completed visual turns `start_user_index..=end_user_index` of a
+/// conversation as a quotable excerpt for another conversation's composer. The
+/// source conversation is only read. Unlike a handoff this needs no model
+/// call, so it also works while a later turn of the source is running: only
+/// finished turns are offered by the UI.
+#[tauri::command]
+pub(super) async fn render_session_excerpt(
+    state: State<'_, AppState>,
+    id: String,
+    start_user_index: usize,
+    end_user_index: usize,
+) -> Result<wisp_dto::SessionExcerpt, String> {
+    let frame_id = id.trim().to_string();
+    let messages =
+        load_excerpt_messages(&state, &frame_id, start_user_index, end_user_index).await?;
+    let excerpt = wisp_core::ContextManager::render_excerpt(
+        &messages,
+        wisp_core::context::EXCERPT_MAX_BYTES,
+    )?;
+    let title = state
+        .store
+        .session_title(&frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    Ok(wisp_dto::SessionExcerpt {
+        session_id: frame_id,
+        title,
+        start_user_index,
+        end_user_index,
+        text: excerpt.text,
+        truncated: excerpt.truncated,
+    })
+}
+
+async fn load_excerpt_messages(
+    state: &AppState,
+    frame_id: &str,
+    start_user_index: usize,
+    end_user_index: usize,
+) -> Result<Vec<Message>, String> {
+    if frame_id.is_empty() {
+        return Err("No session to quote from.".into());
+    }
+    if start_user_index > end_user_index || end_user_index == usize::MAX {
+        return Err("Invalid excerpt range.".into());
+    }
+    if state
+        .store
+        .get_acp_session(frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err("ACP conversations cannot be used as a quote source.".into());
+    }
+    let runtime = state.sessions.lock().await.get(frame_id).cloned();
+    if let Some(runtime) = runtime.as_deref() {
+        flush_session_events(&runtime.ui_event_writer).await?;
+    }
+    let running = state.running_turns.lock().await.contains(frame_id);
+    if running
+        && state
+            .store
+            .visual_turn_anchor(frame_id, end_user_index + 1)
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+    {
+        return Err("Wait for the selected turns to finish.".into());
+    }
+    visual_turn_range_messages(&state.store, frame_id, start_user_index, end_user_index).await
+}
+
+/// Generate an unsaved procedure using only the selected durable turns, including
+/// tool operations/results. This never runs tools or continues the source session.
+#[tauri::command]
+pub(super) async fn generate_session_experience(
+    state: State<'_, AppState>,
+    id: String,
+    start_user_index: usize,
+    end_user_index: usize,
+    instruction: Option<String>,
+) -> Result<wisp_dto::SessionExperience, String> {
+    let frame_id = id.trim();
+    let project_id = state
+        .store
+        .frame_project_id(frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Session project was not found.".to_string())?;
+    let _activity = state.begin_project_activity(&project_id)?;
+    let messages =
+        load_excerpt_messages(&state, frame_id, start_user_index, end_user_index).await?;
+    let (evidence, truncated) = crate::session_experience::evidence(&messages)?;
+    let focus = instruction.as_deref().unwrap_or("").trim();
+    if focus.chars().count() > 1000 {
+        return Err("Experience focus cannot exceed 1000 characters.".into());
+    }
+    let prompt = serde_json::json!({
+        "focus": focus,
+        "first_turn": start_user_index + 1,
+        "last_turn": end_user_index + 1,
+        "evidence_shortened": truncated,
+        "transcript": evidence,
+    })
+    .to_string();
+    let completion = tokio::time::timeout(
+        BRANCH_SUMMARY_TIMEOUT,
+        turn_hooks::side_complete(
+            &state,
+            frame_id,
+            "session_experience",
+            turn_hooks::SideModel::Session { max_tokens: 4096 },
+            crate::session_experience::SYSTEM_PROMPT,
+            &prompt,
+            None,
+        ),
+    )
+    .await
+    .map_err(|_| "Experience generation timed out. Please try again.".to_string())??;
+    let content = completion.text.trim();
+    if content.is_empty() {
+        return Err("The model returned an empty experience draft.".into());
+    }
+    Ok(wisp_dto::SessionExperience {
+        content: content.to_string(),
+        truncated,
+    })
+}
+
+/// Model-context rows of the visual turns `start..=end`, oldest first. Each
+/// turn is read from the epoch its User event anchors to, so a compaction
+/// between two turns neither hides the earlier turn nor duplicates the kept
+/// tail copied into the newer epoch. Sessions without User events (legacy
+/// transcripts) fall back to epoch-0 row indexes. Errors when the range runs
+/// past the completed turns.
+pub(super) async fn visual_turn_range_messages(
+    store: &Store,
+    frame_id: &str,
+    start: usize,
+    end: usize,
+) -> Result<Vec<wisp_llm::Message>, String> {
+    const UNAVAILABLE: &str = "The selected turns are not available.";
+    if start > end {
+        return Err("Invalid excerpt range.".into());
+    }
+    let first_anchor = store
+        .visual_turn_anchor(frame_id, start)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    let Some(mut anchor) = first_anchor else {
+        // Legacy transcript: no persisted User events to anchor on.
+        let rows = store
+            .load_messages_in_epoch(frame_id, 0)
+            .await
+            .map_err(|e| format!("{e}"))?;
+        let msgs = rows
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>();
+        let from = user_message_start(&msgs, start);
+        let to = user_message_start(&msgs, end.saturating_add(1));
+        if from >= msgs.len() || user_message_start(&msgs, end) >= msgs.len() {
+            return Err(UNAVAILABLE.into());
+        }
+        return Ok(msgs[from..to].to_vec());
+    };
+    let mut epochs: HashMap<i64, Vec<(i64, wisp_llm::Message)>> = HashMap::new();
+    let mut out = Vec::new();
+    for user_index in start..=end {
+        let next = store
+            .visual_turn_anchor(frame_id, user_index.saturating_add(1))
+            .await
+            .map_err(|e| format!("{e}"))?;
+        let epoch = store
+            .resolve_message_epoch(frame_id, anchor)
+            .await
+            .map_err(|e| format!("{e}"))?
+            .unwrap_or(0);
+        if !epochs.contains_key(&epoch) {
+            let rows = store
+                .load_messages_in_epoch(frame_id, epoch)
+                .await
+                .map_err(|e| format!("{e}"))?;
+            epochs.insert(epoch, rows);
+        }
+        let end_seq = next.map_or(i64::MAX, |seq| seq - 1);
+        out.extend(
+            epochs[&epoch]
+                .iter()
+                .filter(|(seq, _)| *seq >= anchor && *seq <= end_seq)
+                .map(|(_, message)| message.clone()),
+        );
+        match next {
+            Some(seq) if user_index < end => anchor = seq,
+            None if user_index < end => return Err(UNAVAILABLE.into()),
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        return Err(UNAVAILABLE.into());
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -467,6 +822,11 @@ pub(super) async fn list_sessions_page(
         .list_session_branch_states(&ap.id)
         .await
         .map_err(|error| error.to_string())?;
+    let dispatched = state
+        .store
+        .list_dispatched_sessions(&ap.id)
+        .await
+        .map_err(|error| error.to_string())?;
     let running = state.running_turns.lock().await.clone();
     let mut items: Vec<SessionInfo> = pinned_rows
         .into_iter()
@@ -480,6 +840,7 @@ pub(super) async fn list_sessions_page(
                 .is_some_and(|state| state != "orphaned")
                 .then_some(branched_from)
                 .flatten(),
+            dispatched_from: dispatched.get(&id).cloned(),
             stale_prompt: false,
             id,
             title,
@@ -498,6 +859,7 @@ pub(super) async fn list_sessions_page(
                     .is_some_and(|state| state != "orphaned")
                     .then_some(branched_from)
                     .flatten(),
+                dispatched_from: dispatched.get(&id).cloned(),
                 stale_prompt: false,
                 id,
                 title,
@@ -673,6 +1035,22 @@ pub(super) async fn rename_folder(
 }
 
 #[tauri::command]
+pub(super) async fn reorder_folders(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let ap = state.require_active(window.label())?;
+    let _project_activity = state.begin_project_activity(&ap.id)?;
+    state
+        .store
+        .reorder_folders(&ap.id, &ids)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub(super) async fn delete_folder(
     state: State<'_, AppState>,
     window: crate::workspace_surface::WorkspaceSurface,
@@ -734,6 +1112,7 @@ pub(super) async fn transfer_session_to_project(
     mode: String,
     include_artifacts: Option<bool>,
     artifact_fingerprint: Option<String>,
+    expected_revision: Option<String>,
 ) -> Result<String, String> {
     let source = state.require_active(window.label())?;
     if target_project_id == source.id {
@@ -750,7 +1129,7 @@ pub(super) async fn transfer_session_to_project(
     }
     let owner = state
         .store
-        .frame_project_id(&id)
+        .live_frame_project_id(&id)
         .await
         .map_err(|error| error.to_string())?;
     if owner.as_deref() != Some(source.id.as_str()) {
@@ -833,6 +1212,25 @@ pub(super) async fn transfer_session_to_project(
         );
     }
 
+    if let Some(runtime) = runtime.as_deref() {
+        crate::native_session_transfer::require_no_queue(runtime)?;
+        flush_session_events(&runtime.ui_event_writer).await?;
+    }
+    if state
+        .store
+        .live_frame_project_id(&id)
+        .await
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        != Some(source.id.as_str())
+    {
+        return Err("Conversation no longer exists in the source project".into());
+    }
+    if let Some(expected) = expected_revision {
+        crate::native_session_transfer::require_revision(&state.store, &source.id, &id, &expected)
+            .await?;
+    }
+
     let new_id = Uuid::new_v4().to_string();
     if remove_source {
         if include_artifacts {
@@ -879,30 +1277,267 @@ pub(super) async fn transfer_session_to_project(
     Ok(new_id)
 }
 
+/// A conversation's branches and subagents (deepest first), and the open
+/// explorations that it or any of them started.
+async fn session_children(
+    store: &Store,
+    project_id: &str,
+    id: &str,
+) -> Result<
+    (
+        Vec<wisp_store::SessionDescendant>,
+        Vec<wisp_store::ExplorationSummary>,
+    ),
+    String,
+> {
+    let descendants = store
+        .list_session_descendants(id, project_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let family: HashSet<&str> = std::iter::once(id)
+        .chain(descendants.iter().map(|child| child.id.as_str()))
+        .collect();
+    let explorations = store
+        .list_project_explorations(project_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|summary| family.contains(summary.source_frame_id.as_str()))
+        .collect();
+    Ok((descendants, explorations))
+}
+
+/// What deleting `ids` together with their children would also remove. A
+/// selected conversation nested under another selected one is not counted
+/// but listed as nested: deleting children takes it along with that one.
+#[tauri::command]
+pub(super) async fn preview_session_children(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    ids: Vec<String>,
+) -> Result<wisp_dto::SessionChildrenPreview, String> {
+    let ap = state.require_active(window.label())?;
+    children_preview(&state.store, &ap.id, &ids).await
+}
+
+async fn children_preview(
+    store: &Store,
+    project_id: &str,
+    ids: &[String],
+) -> Result<wisp_dto::SessionChildrenPreview, String> {
+    let mut subagents = HashSet::new();
+    let mut branches = HashSet::new();
+    let mut explorations = HashSet::new();
+    let mut nested = BTreeSet::new();
+    for id in ids {
+        let (descendants, rounds) = session_children(store, project_id, id).await?;
+        for child in descendants {
+            if ids.contains(&child.id) {
+                nested.insert(child.id);
+            } else if child.subagent {
+                subagents.insert(child.id);
+            } else {
+                branches.insert(child.id);
+            }
+        }
+        explorations.extend(rounds.into_iter().map(|summary| summary.exploration.id));
+    }
+    Ok(wisp_dto::SessionChildrenPreview {
+        subagents: subagents.len(),
+        branches: branches.len(),
+        explorations: explorations.len(),
+        nested: nested.into_iter().collect(),
+    })
+}
+
+/// Artifact previews for deleting `ids` together with their branches and
+/// subagents. A selected conversation nested under another selected one is
+/// previewed, and deleted, as part of that one's family.
+#[tauri::command]
+pub(super) async fn preview_session_family_artifacts(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    ids: Vec<String>,
+) -> Result<Vec<wisp_dto::SessionFamilyArtifactPreview>, String> {
+    let ap = state.require_active(window.label())?;
+    let _project_activity = state.begin_project_activity(&ap.id)?;
+    let mut families = Vec::new();
+    for id in &ids {
+        let mut members = state
+            .store
+            .preview_session_family_artifacts(id, &ap.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (_, preview) = members
+            .pop()
+            .ok_or_else(|| "Session not found".to_string())?;
+        families.push(wisp_dto::SessionFamilyArtifactPreview {
+            id: id.clone(),
+            preview,
+            children: members
+                .into_iter()
+                .map(|(id, preview)| wisp_dto::SessionChildArtifactPreview { id, preview })
+                .collect(),
+        });
+    }
+    let nested: HashSet<String> = families
+        .iter()
+        .flat_map(|family| family.children.iter().map(|child| child.id.clone()))
+        .collect();
+    families.retain(|family| !nested.contains(&family.id));
+    Ok(families)
+}
+
+/// What happens to a deleted conversation's branches and subagents.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChildLinks {
+    /// Clients that predate the choice: a conversation with branches is kept.
+    Refuse,
+    /// Branches and subagents stay as standalone conversations.
+    Detach,
+}
+
+/// Which artifact files go with a deleted conversation.
+enum DeletedFiles<'a> {
+    /// None; transcript-only deletion leaves them in the workspace.
+    Keep,
+    /// The ones in the preview reviewed for this conversation alone.
+    Reviewed(&'a str),
+    /// The ones in its plan within a family deletion reviewed as a whole.
+    Family(&'a mut wisp_store::SessionFamilyArtifacts),
+}
+
+/// Deleting files waits for the conversation's turn, approval or review.
+async fn require_idle_for_files(state: &AppState, id: &str) -> Result<(), String> {
+    if state.running_turns.lock().await.contains(id)
+        || state.awaiting_confirm.lock().unwrap().contains(id)
+        || state.reviewing.lock().unwrap().contains(id)
+    {
+        return Err("Wait for the session to finish before deleting its files.".into());
+    }
+    Ok(())
+}
+
+/// Delete a conversation. `include_children` deletes its branches and
+/// subagents, nested ones included, and discards the exploration rounds they
+/// own; `Some(false)` keeps branches and subagents as standalone
+/// conversations. With `include_artifacts`, each deleted conversation takes
+/// its files: `artifact_fingerprint` is the reviewed preview of `id`, and
+/// `child_artifact_fingerprints` those of its branches and subagents (from
+/// `preview_session_family_artifacts`). Returns every deleted conversation id.
 #[tauri::command]
 pub(super) async fn delete_session(
     state: State<'_, AppState>,
+    terminals: State<'_, crate::terminal_sessions::TerminalManager>,
     window: crate::workspace_surface::WorkspaceSurface,
     id: String,
     include_artifacts: Option<bool>,
     artifact_fingerprint: Option<String>,
-) -> Result<(), String> {
-    state
-        .store
-        .require_unarchived_session(&id)
-        .await
-        .map_err(|e| e.to_string())?;
+    include_children: Option<bool>,
+    child_artifact_fingerprints: Option<HashMap<String, String>>,
+) -> Result<Vec<String>, String> {
     let ap = state.require_active(window.label())?;
     let include_artifacts = include_artifacts.unwrap_or(false);
     if include_artifacts && artifact_fingerprint.is_none() {
         return Err("Deleting artifacts requires a fresh preview.".into());
     }
-    if include_artifacts
-        && (state.running_turns.lock().await.contains(&id)
-            || state.awaiting_confirm.lock().unwrap().contains(&id)
-            || state.reviewing.lock().unwrap().contains(&id))
-    {
-        return Err("Wait for the session to finish before deleting its files.".into());
+    let children = match include_children {
+        None => ChildLinks::Refuse,
+        Some(false) => ChildLinks::Detach,
+        Some(true) => {
+            let (descendants, explorations) = session_children(&state.store, &ap.id, &id).await?;
+            // Check every conversation first so a refusal deletes nothing.
+            for frame in std::iter::once(id.as_str())
+                .chain(descendants.iter().map(|child| child.id.as_str()))
+            {
+                state
+                    .store
+                    .require_unarchived_session(frame)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if include_artifacts {
+                    require_idle_for_files(&state, frame).await?;
+                }
+            }
+            // Deleting one conversation changes what the others would
+            // preview, so every reviewed preview is checked now and each
+            // conversation is deleted from its reviewed plan.
+            let mut reviewed = match artifact_fingerprint.filter(|_| include_artifacts) {
+                Some(fingerprint) => {
+                    let mut fingerprints: BTreeMap<String, String> = child_artifact_fingerprints
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    fingerprints.insert(id.clone(), fingerprint);
+                    let _exclusive = state.begin_project_exclusive_activity(&ap.id)?;
+                    Some(
+                        state
+                            .store
+                            .review_session_family_artifacts(&id, &ap.id, &fingerprints)
+                            .await
+                            .map_err(|error| error.to_string())?,
+                    )
+                }
+                None => None,
+            };
+            let mut rounds = explorations
+                .into_iter()
+                .map(|summary| summary.source_frame_id)
+                .collect::<Vec<_>>();
+            rounds.sort();
+            rounds.dedup();
+            for source in rounds {
+                exploration_commands::abandon_round(&state, &terminals, &source).await?;
+            }
+            let mut deleted = Vec::new();
+            for child in descendants {
+                let files = reviewed
+                    .as_mut()
+                    .map_or(DeletedFiles::Keep, DeletedFiles::Family);
+                delete_one_session(
+                    &state,
+                    window.label(),
+                    &ap,
+                    &child.id,
+                    files,
+                    ChildLinks::Detach,
+                )
+                .await?;
+                deleted.push(child.id);
+            }
+            let files = reviewed
+                .as_mut()
+                .map_or(DeletedFiles::Keep, DeletedFiles::Family);
+            delete_one_session(&state, window.label(), &ap, &id, files, ChildLinks::Detach).await?;
+            deleted.push(id);
+            return Ok(deleted);
+        }
+    };
+    let files = match artifact_fingerprint.as_deref() {
+        Some(fingerprint) if include_artifacts => DeletedFiles::Reviewed(fingerprint),
+        _ => DeletedFiles::Keep,
+    };
+    delete_one_session(&state, window.label(), &ap, &id, files, children).await?;
+    Ok(vec![id])
+}
+
+async fn delete_one_session(
+    state: &AppState,
+    window_label: &str,
+    ap: &ActiveProject,
+    id: &str,
+    files: DeletedFiles<'_>,
+    children: ChildLinks,
+) -> Result<(), String> {
+    let id = id.to_string();
+    state
+        .store
+        .require_unarchived_session(&id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let include_artifacts = !matches!(files, DeletedFiles::Keep);
+    if include_artifacts {
+        require_idle_for_files(state, &id).await?;
     }
     let _exclusive = if include_artifacts {
         Some(state.begin_project_exclusive_activity(&ap.id)?)
@@ -937,11 +1572,12 @@ pub(super) async fn delete_session(
     let _project_write_locked =
         exploration_commands::conversation_project_write_locked(&state.store, &scope, Some(&id))
             .await?;
-    if state
-        .store
-        .session_has_conversation_branches(&id, &ap.id)
-        .await
-        .map_err(|error| error.to_string())?
+    if children == ChildLinks::Refuse
+        && state
+            .store
+            .session_has_conversation_branches(&id, &ap.id)
+            .await
+            .map_err(|error| error.to_string())?
     {
         return Err("session_has_branches: delete its branches before deleting main".into());
     }
@@ -970,18 +1606,29 @@ pub(super) async fn delete_session(
         None => None,
     };
     state.runtime_manager.stop_session(&ap.id, &id).await;
-    let result = if include_artifacts {
-        state
-            .store
-            .operate_session_with_artifacts(
-                &id,
-                &ap.id,
-                None,
-                artifact_fingerprint.as_deref().unwrap_or_default(),
-            )
-            .await
-    } else {
-        state.store.delete_session(&id, &ap.id).await
+    // The store refuses to delete a conversation that still has branches; kept
+    // ones are detached first. The artifact path can still refuse afterwards
+    // (a stale preview), leaving them standalone beside their parent.
+    if children == ChildLinks::Detach {
+        if let Err(error) = state.store.detach_session_children(&id, &ap.id).await {
+            if let Some(runtime) = runtime.as_ref() {
+                runtime.deleted.store(false, Ordering::SeqCst);
+                if include_artifacts {
+                    runtime.cancel.store(was_cancelled, Ordering::Relaxed);
+                }
+            }
+            return Err(error.to_string());
+        }
+    }
+    let result = match files {
+        DeletedFiles::Keep => state.store.delete_session(&id, &ap.id).await,
+        DeletedFiles::Reviewed(fingerprint) => {
+            state
+                .store
+                .operate_session_with_artifacts(&id, &ap.id, None, fingerprint)
+                .await
+        }
+        DeletedFiles::Family(family) => state.store.delete_session_in_family(family, &id).await,
     };
     if let Err(error) = result {
         if let Some(runtime) = runtime.as_ref() {
@@ -1006,8 +1653,8 @@ pub(super) async fn delete_session(
     // later `tools/call` (e.g. from a reloaded iframe) fails stale instead of
     // pinning the MCP server process.
     state.remove_mcp_app_bridges_for_frame(&id);
-    if state.active_frame(window.label()).as_deref() == Some(id.as_str()) {
-        state.set_active_frame(window.label(), None);
+    if state.active_frame(window_label).as_deref() == Some(id.as_str()) {
+        state.set_active_frame(window_label, None);
     }
     Ok(())
 }
@@ -1144,6 +1791,30 @@ pub(super) async fn rewind_session(
             .active_frame(window.label())
             .ok_or_else(|| "No active session to rewind.".to_string())?,
     };
+    // Wait for a running turn to finish persisting: truncating under it would
+    // leave its later rows (tool results) orphaned past the rewind point.
+    let rt = state.session_runtime(&frame_id).await;
+    let _workflow = rt.workflow.clone().lock_owned().await;
+    if rt.has_queued_turns() {
+        return Err("Remove queued messages before rewinding this conversation".into());
+    }
+    rewind_locked(&state, &frame_id, user_index).await
+}
+
+/// The caller holds the conversation's workflow lock.
+pub(crate) async fn rewind_locked(
+    state: &AppState,
+    frame_id: &str,
+    user_index: usize,
+) -> Result<(), String> {
+    crate::subagent_tool::require_instruction_source(
+        &state.store,
+        frame_id,
+        crate::TurnOrigin::Desktop,
+        false,
+    )
+    .await?;
+    let frame_id = frame_id.to_owned();
     let project_id = state
         .store
         .frame_project_id(&frame_id)
@@ -1203,6 +1874,7 @@ pub(super) async fn undo_compaction(
     app: AppHandle,
     window: crate::workspace_surface::WorkspaceSurface,
     session_id: Option<String>,
+    expected_head_epoch: Option<u64>,
 ) -> Result<u64, String> {
     let frame_id = match session_id.as_deref().filter(|s| !s.is_empty()) {
         Some(id) => id.to_string(),
@@ -1248,14 +1920,23 @@ pub(super) async fn undo_compaction(
     {
         return Err("ACP sessions cannot undo compaction.".into());
     }
-    if state.running_turns.lock().await.contains(&frame_id) {
-        return Err("Stop the running turn before undoing compaction.".into());
-    }
-    let epoch = state
-        .store
-        .undo_context_epoch(&frame_id)
+    crate::subagent_tool::require_instruction_source(
+        &state.store,
+        &frame_id,
+        crate::TurnOrigin::Desktop,
+        false,
+    )
+    .await?;
+    // A finishing turn leaves running_turns before it persists its own
+    // compaction epoch; the workflow lock covers it until it is done.
+    let _workflow = state
+        .session_runtime(&frame_id)
         .await
-        .map_err(|error| error.to_string())?;
+        .workflow
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| "Stop the running turn before undoing compaction.")?;
+    let epoch = undo_inspected_compaction(&state.store, &frame_id, expected_head_epoch).await?;
     if let Some(rt) = state.sessions.lock().await.get(&frame_id).cloned() {
         *rt.agent.lock().await = None;
         rt.sync_last_seq_from_store(&state.store, &frame_id).await?;
@@ -1274,7 +1955,30 @@ pub(super) async fn undo_compaction(
     Ok(u64::try_from(epoch).unwrap_or(0))
 }
 
-async fn last_user_index(store: &Store, frame_id: &str) -> Result<usize, String> {
+// Caller holds the session workflow lock through the comparison and mutation.
+async fn undo_inspected_compaction(
+    store: &Store,
+    frame_id: &str,
+    expected: Option<u64>,
+) -> Result<i64, String> {
+    if let Some(expected) = expected {
+        let current = store
+            .frame_head_epoch(frame_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if expected == 0 || u64::try_from(current).ok() != Some(expected) {
+            return Err(
+                "The model context changed; inspect it again before undoing compaction.".into(),
+            );
+        }
+    }
+    store
+        .undo_context_epoch(frame_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn last_user_index(store: &Store, frame_id: &str) -> Result<usize, String> {
     let visual = store
         .visual_user_count(frame_id)
         .await
@@ -1434,10 +2138,40 @@ async fn ask_user_items(state: &AppState, frame_id: &str) -> Vec<UiItem> {
                 kind: None,
                 status: None,
                 locations: None,
+                seq: None,
                 resources: Vec::new(),
             }
         })
         .collect()
+}
+
+/// Message seq → item offset reached once that message was folded, the same
+/// shape `events_to_items` reports for persisted `MessageBoundary` events.
+fn message_boundaries(
+    messages: &[(i64, wisp_llm::Message)],
+    ends: &[usize],
+) -> HashMap<i64, usize> {
+    messages
+        .iter()
+        .zip(ends)
+        .map(|((seq, _), end)| (*seq, *end))
+        .collect()
+}
+
+/// Bind each folded row to the persisted message whose boundary first covers
+/// it. Rows after the last boundary (a live turn still streaming, or a saved
+/// message whose boundary event was never persisted) keep `None`.
+fn assign_item_seqs(items: &mut [UiItem], boundaries: &HashMap<i64, usize>) {
+    let mut ends: Vec<(i64, usize)> = boundaries.iter().map(|(seq, end)| (*seq, *end)).collect();
+    ends.sort_unstable();
+    let mut cursor = 0usize;
+    for (seq, end) in ends {
+        let end = end.min(items.len());
+        for item in &mut items[cursor.min(end)..end] {
+            item.seq = Some(seq);
+        }
+        cursor = cursor.max(end);
+    }
 }
 
 pub(super) fn transcript_page_items(
@@ -1467,9 +2201,12 @@ pub(super) fn transcript_page_items(
         })
         .collect();
     let (mut items, boundaries) = if events.is_empty() {
+        let prefix_len = page.event_message_prefix_len.unwrap_or(msgs.len());
+        let (items, ends) =
+            messages_to_items_ends(&msgs[..prefix_len], MessagesToItemsMode::Transcript);
         (
-            messages_to_items(&msgs[..page.event_message_prefix_len.unwrap_or(msgs.len())]),
-            HashMap::new(),
+            items,
+            message_boundaries(&page.messages[..prefix_len], &ends),
         )
     } else {
         let first_seq = events.iter().find_map(|event| match event {
@@ -1484,18 +2221,20 @@ pub(super) fn transcript_page_items(
                     .count()
             })
         });
-        let mut prefix = messages_to_items(&msgs[..prefix_len]);
+        let (mut prefix, ends) =
+            messages_to_items_ends(&msgs[..prefix_len], MessagesToItemsMode::Transcript);
         let prefix_items = prefix.len();
+        let mut boundaries = message_boundaries(&page.messages[..prefix_len], &ends);
         let (event_items, event_boundaries) = events_to_items(&events);
         prefix.extend(event_items);
-        (
-            prefix,
+        boundaries.extend(
             event_boundaries
                 .into_iter()
-                .map(|(seq, offset)| (seq, prefix_items + offset))
-                .collect(),
-        )
+                .map(|(seq, offset)| (seq, prefix_items + offset)),
+        );
+        (prefix, boundaries)
     };
+    assign_item_seqs(&mut items, &boundaries);
     let mut resources_by_seq = HashMap::<i64, Vec<resource_refs::UiMessageResource>>::new();
     for resource in &page.resources {
         resources_by_seq
@@ -1600,6 +2339,7 @@ pub(super) fn transcript_page_items(
                 kind: None,
                 status: None,
                 locations: None,
+                seq: Some(*message_seq),
                 resources: Vec::new(),
             },
         );
@@ -1621,7 +2361,7 @@ pub(super) async fn load_session(
     let presentations = if before_seq.is_none() {
         let mut presentations = state
             .store
-            .load_latest_session_ui_event(&id, "ToolPresentation")
+            .load_latest_session_presentation(&id, "mcp_app")
             .await
             .map_err(|e| format!("{e}"))?
             .and_then(|json| serde_json::from_str::<AgentEvent>(&json).ok())
@@ -1689,11 +2429,26 @@ pub(super) async fn load_session(
     } else {
         Vec::new()
     };
+    let mut queued_turn_ids: Option<Vec<String>> = None;
     if before_seq.is_none() {
         let (project, _) = exploration_commands::working_project_for_frame(&state, &id).await?;
         state.set_active(window.label(), project);
         state.set_active_frame(window.label(), Some(id.clone()));
         let _ = state.store.mark_frame_seen(&id).await;
+        // Read the queue only now that this window is bound to the session:
+        // every later transition reaches it as an event. Looked up again
+        // because a first enqueue may have created the runtime meanwhile.
+        let queue_runtime = state.sessions.lock().await.get(&id).cloned();
+        queued_turn_ids = Some(
+            queue_runtime
+                .map(|runtime| {
+                    crate::native_queue::items(&runtime)
+                        .into_iter()
+                        .map(|item| item.id)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
     }
     let mut items = transcript_page_items(&page)?;
     if before_seq.is_none() {
@@ -1720,6 +2475,7 @@ pub(super) async fn load_session(
         context_epochs,
         head_epoch,
         in_context_from_user_index,
+        queued_turn_ids,
         pending_approvals: if before_seq.is_none() {
             state
                 .confirms
@@ -1851,6 +2607,7 @@ async fn read_session_context_state(
             kind: None,
             status: None,
             locations: None,
+            seq: None,
             resources: Vec::new(),
         })
         .collect::<Vec<_>>();
@@ -2027,7 +2784,7 @@ async fn read_session_transcript_page(
     Ok(page)
 }
 
-async fn flush_session_events(
+pub(crate) async fn flush_session_events(
     writer: &StdMutex<Option<tokio::sync::mpsc::WeakUnboundedSender<SessionUiMessage>>>,
 ) -> Result<(), String> {
     let writer = writer
@@ -2098,23 +2855,79 @@ pub(super) async fn set_viewed_session(
 }
 
 #[tauri::command]
+pub(super) async fn search_project_chats(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    project_id: String,
+    query: String,
+    cursor: Option<wisp_dto::ProjectChatSearchCursor>,
+) -> Result<wisp_dto::ProjectChatSearchPage, String> {
+    let active = state.require_active(window.label())?;
+    if active.id != project_id {
+        return Err("The active project changed. Reopen chat search.".into());
+    }
+    let page = state
+        .store
+        .search_project_chats(&project_id, &query, cursor.as_ref(), 50)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(page)
+}
+
+#[tauri::command]
+pub(super) async fn locate_project_chat_match(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    project_id: String,
+    session_id: String,
+    message_seq: i64,
+) -> Result<Option<wisp_dto::ProjectChatSearchTarget>, String> {
+    if state.require_active(window.label())?.id != project_id {
+        return Err("The active project changed. Reopen chat search.".into());
+    }
+    state
+        .store
+        .locate_project_chat_match(&project_id, &session_id, message_seq)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn list_needs_you_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<wisp_dto::SessionSearchInfo>, String> {
+    let running = state.running_turns.lock().await.clone();
+    let awaiting = state.awaiting_confirm.lock().unwrap().clone();
+    wisp_app::projects::list_needs_you_sessions(&state.store, &running, &awaiting)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub(super) async fn search_sessions(
     state: State<'_, AppState>,
     query: Option<String>,
     limit: Option<i64>,
     project_id: Option<String>,
     preferred_project_id: Option<String>,
+    include_shelved: Option<bool>,
 ) -> Result<Vec<SessionSearchInfo>, String> {
     let running = state.running_turns.lock().await.clone();
     let awaiting = state.awaiting_confirm.lock().unwrap().clone();
+    // `includeShelved` only widens keyword searches (the composer `#` picker);
+    // the store keeps shelved rows out of the empty-query recent list.
     let rows = state
         .store
-        .search_sessions(
+        .search_sessions_with_options(
             project_id.as_deref(),
             query.as_deref().unwrap_or(""),
             limit.unwrap_or(12),
             None,
             preferred_project_id.as_deref(),
+            &[],
+            wisp_store::SessionSearchOptions {
+                include_shelved: include_shelved.unwrap_or(false),
+            },
         )
         .await
         .map_err(|e| format!("{e}"))?;
@@ -2135,6 +2948,7 @@ pub(super) async fn search_sessions(
             title: s.title,
             ts: s.created_at,
             activity_at: s.activity_at,
+            shelved: s.shelved,
         })
         .collect())
 }
@@ -2314,6 +3128,30 @@ mod compaction_undo_tests {
     use super::*;
 
     #[tokio::test]
+    async fn inspected_compaction_rejects_a_different_head_without_mutating_messages() {
+        let store = store_with_compacted_frame().await;
+        let before = store.load_messages("f").await.unwrap();
+        for expected in [0, 2] {
+            assert!(undo_inspected_compaction(&store, "f", Some(expected))
+                .await
+                .unwrap_err()
+                .contains("changed"));
+            assert_eq!(store.frame_head_epoch("f").await.unwrap(), 1);
+            assert_eq!(
+                serde_json::to_value(store.load_messages("f").await.unwrap()).unwrap(),
+                serde_json::to_value(&before).unwrap()
+            );
+        }
+        assert_eq!(
+            undo_inspected_compaction(&store, "f", Some(1))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.frame_head_epoch("f").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn context_state_restores_parent_and_does_not_reuse_undone_identity() {
         let store = store_with_compacted_frame().await;
         let messages = store.load_messages("f").await.unwrap();
@@ -2373,6 +3211,7 @@ mod compaction_undo_tests {
             kind: None,
             status: None,
             locations: None,
+            seq: None,
             resources: Vec::new(),
         }];
         let (epochs, head) = load_context_epoch_page(&store, "f", &mut items)
@@ -2414,6 +3253,7 @@ mod compaction_undo_tests {
             kind: None,
             status: None,
             locations: None,
+            seq: None,
             resources: Vec::new(),
         }];
         let (epochs, head) = load_context_epoch_page(&store, "f", &mut items)
@@ -2520,5 +3360,307 @@ mod context_view_tests {
                 .unwrap(),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod delete_children_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn session_children_are_counted_through_nested_subagents_and_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("wisp.sqlite")).await.unwrap();
+        store.create_project("p", "P", "").await.unwrap();
+        for id in ["main", "branch", "sub", "sub-branch", "other"] {
+            store.create_frame(id, "p", "OPERON", "m").await.unwrap();
+        }
+        store
+            .set_session_branch_point("branch", "main", 0, "before_user")
+            .await
+            .unwrap();
+        store
+            .set_session_dispatched_from("sub", "main")
+            .await
+            .unwrap();
+        store
+            .set_session_branch_point("sub-branch", "sub", 0, "after_response")
+            .await
+            .unwrap();
+
+        let (descendants, explorations) = session_children(&store, "p", "main").await.unwrap();
+        assert_eq!(
+            descendants
+                .iter()
+                .map(|child| (child.id.as_str(), child.subagent))
+                .collect::<Vec<_>>(),
+            [("sub-branch", false), ("branch", false), ("sub", true)]
+        );
+        assert!(explorations.is_empty());
+        let (descendants, _) = session_children(&store, "p", "other").await.unwrap();
+        assert!(descendants.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_selection_holding_a_whole_family_lists_it_as_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("wisp.sqlite")).await.unwrap();
+        store.create_project("p", "P", "").await.unwrap();
+        for id in ["main", "branch", "sub", "sub-branch", "other"] {
+            store.create_frame(id, "p", "OPERON", "m").await.unwrap();
+        }
+        store
+            .set_session_branch_point("branch", "main", 0, "before_user")
+            .await
+            .unwrap();
+        store
+            .set_session_dispatched_from("sub", "main")
+            .await
+            .unwrap();
+        store
+            .set_session_branch_point("sub-branch", "sub", 0, "after_response")
+            .await
+            .unwrap();
+        let select = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+
+        // Select all: nothing is left to count, but every conversation under
+        // `main` goes with it rather than on its own.
+        let all = children_preview(
+            &store,
+            "p",
+            &select(&["sub-branch", "other", "branch", "sub", "main"]),
+        )
+        .await
+        .unwrap();
+        assert!(all.is_empty());
+        assert_eq!(all.nested, ["branch", "sub", "sub-branch"]);
+
+        // A partly selected family counts what is left and lists the rest.
+        let partial = children_preview(&store, "p", &select(&["main", "sub"]))
+            .await
+            .unwrap();
+        assert_eq!((partial.subagents, partial.branches), (0, 2));
+        assert_eq!(partial.nested, ["sub"]);
+
+        // Unrelated conversations are not nested in one another.
+        let apart = children_preview(&store, "p", &select(&["sub-branch", "other"]))
+            .await
+            .unwrap();
+        assert!(apart.is_empty());
+        assert!(apart.nested.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod branch_kernel_tests {
+    use super::*;
+
+    /// A conversation with two completed visual turns, persisted the way a
+    /// real turn leaves it: messages plus the User/MessageBoundary UI events
+    /// that `resolve_visual_keep` maps checkpoints through.
+    async fn store_with_two_turns(dir: &std::path::Path) -> Store {
+        let store = Store::open(&dir.join("wisp.sqlite")).await.unwrap();
+        store.create_project("p", "P", "").await.unwrap();
+        store
+            .create_frame("main", "p", "OPERON", "m")
+            .await
+            .unwrap();
+        for (seq, message) in [
+            (1, Message::system("sys")),
+            (2, Message::user("q1")),
+            (3, Message::assistant("a1")),
+            (4, Message::user("q2")),
+            (5, Message::assistant("a2")),
+        ] {
+            store.append_message("main", seq, &message).await.unwrap();
+        }
+        let mut event_seq = 1i64;
+        for (text, user_seq) in [("q1", 2), ("q2", 4)] {
+            for event in [
+                format!(r#"{{"kind":"User","frame_id":"main","text":"{text}"}}"#),
+                format!(r#"{{"kind":"MessageBoundary","frame_id":"main","seq":{user_seq}}}"#),
+                format!(r#"{{"kind":"Text","frame_id":"main","delta":"a"}}"#),
+                format!(
+                    r#"{{"kind":"MessageBoundary","frame_id":"main","seq":{}}}"#,
+                    user_seq + 1
+                ),
+            ] {
+                store
+                    .append_session_ui_event("main", event_seq, &event)
+                    .await
+                    .unwrap();
+                event_seq += 1;
+            }
+        }
+        store
+    }
+
+    fn texts(messages: &[Message]) -> Vec<(wisp_llm::Role, String)> {
+        messages
+            .iter()
+            .map(|message| (message.role, message.content.as_text()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn create_branch_from_copies_the_prefix_settings_and_branch_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_two_turns(dir.path()).await;
+        store
+            .set_frame_reasoning_effort("main", "p", Some("high"))
+            .await
+            .unwrap();
+        store
+            .upsert_execution_context(
+                &wisp_store::ExecutionContext::new("ssh:cpu1", "CPU1").unwrap(),
+            )
+            .await
+            .unwrap();
+        store
+            .set_session_execution_context_enabled("main", "ssh:cpu1", true)
+            .await
+            .unwrap();
+        let grants = StdMutex::new(ApprovalGrants::default());
+        grants
+            .lock()
+            .unwrap()
+            .session
+            .insert("main".into(), HashSet::new());
+        let full_permission = StdRwLock::new(HashSet::from(["main".to_string()]));
+        let permissions = || BranchPermissions {
+            approval_grants: &grants,
+            full_permission_sessions: &full_permission,
+        };
+
+        // Default checkpoint: the last completed turn, reply included — the
+        // same (epoch, keep_seq) the `/fork` command path resolves.
+        assert_eq!(last_user_index(&store, "main").await.unwrap(), 1);
+        assert_eq!(
+            resolve_visual_keep(&store, "main", 1, true).await.unwrap(),
+            (0, 5)
+        );
+        let branch = create_branch_from(
+            &store,
+            permissions(),
+            "p",
+            "main",
+            None,
+            BranchCheckpointKind::AfterResponse,
+            Some("  Try method B  "),
+        )
+        .await
+        .unwrap();
+        assert_ne!(branch, "main");
+        assert_eq!(
+            texts(&store.load_messages(&branch).await.unwrap()),
+            texts(&store.load_messages("main").await.unwrap())
+        );
+        let links = store.list_session_branches("main", "p").await.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].id, branch);
+        assert_eq!(links[0].source_session_id, "main");
+        assert_eq!(links[0].checkpoint_user_index, 1);
+        assert_eq!(links[0].checkpoint_kind, "after_response");
+        assert_eq!(links[0].title, "Try method B");
+        assert_eq!(
+            store.session_branch_state(&branch).await.unwrap(),
+            Some("active")
+        );
+        assert_eq!(
+            store.frame_model(&branch).await.unwrap().as_deref(),
+            Some(models::session_profile_id(&store, "main").await.as_str())
+        );
+        assert_eq!(
+            store.frame_reasoning_effort(&branch).await.unwrap(),
+            Some("high".into())
+        );
+        assert_eq!(
+            store
+                .list_session_execution_context_ids(&branch)
+                .await
+                .unwrap(),
+            vec!["ssh:cpu1".to_string()]
+        );
+        assert!(grants.lock().unwrap().session.contains_key(&branch));
+        assert!(full_permission.read().unwrap().contains(&branch));
+
+        // An explicit earlier checkpoint before the first user turn keeps only
+        // the system prompt, and is recorded as such.
+        let early = create_branch_from(
+            &store,
+            permissions(),
+            "p",
+            "main",
+            Some(0),
+            BranchCheckpointKind::BeforeUser,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            texts(&store.load_messages(&early).await.unwrap()),
+            vec![(wisp_llm::Role::System, "sys".to_string())]
+        );
+        let early_link = store
+            .list_session_branches("main", "p")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|link| link.id == early)
+            .unwrap();
+        assert_eq!(
+            (
+                early_link.checkpoint_user_index,
+                early_link.checkpoint_kind.as_str()
+            ),
+            (0, "before_user")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_is_not_branchable_again_and_kinds_parse_strictly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_two_turns(dir.path()).await;
+        let grants = StdMutex::new(ApprovalGrants::default());
+        let full_permission = StdRwLock::new(HashSet::new());
+        assert!(require_branchable(&store, "main").await.is_ok());
+        assert!(require_branchable(&store, "missing").await.is_err());
+        let branch = create_branch_from(
+            &store,
+            BranchPermissions {
+                approval_grants: &grants,
+                full_permission_sessions: &full_permission,
+            },
+            "p",
+            "main",
+            None,
+            BranchCheckpointKind::AfterResponse,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            require_branchable(&store, &branch).await,
+            Err("Conversation branches cannot be branched again.".into())
+        );
+        // The source's permissions were absent, so the branch's are too.
+        assert!(!grants.lock().unwrap().session.contains_key(&branch));
+        assert!(!full_permission.read().unwrap().contains(&branch));
+
+        assert_eq!(
+            BranchCheckpointKind::parse(None).unwrap(),
+            BranchCheckpointKind::AfterResponse
+        );
+        assert_eq!(
+            BranchCheckpointKind::parse(Some("before_user")).unwrap(),
+            BranchCheckpointKind::BeforeUser
+        );
+        assert!(BranchCheckpointKind::parse(Some("after")).is_err());
+        for kind in [
+            BranchCheckpointKind::BeforeUser,
+            BranchCheckpointKind::AfterResponse,
+        ] {
+            assert_eq!(BranchCheckpointKind::parse(Some(kind.as_str())), Ok(kind));
+        }
     }
 }

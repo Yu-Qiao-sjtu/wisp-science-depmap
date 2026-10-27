@@ -159,6 +159,142 @@ impl TransferHandle {
     }
 }
 
+/// A lexical destination within one selected SSH context. Every target reserves
+/// its subtree so directory uploads also exclude writes to their children.
+/// Remote aliases, home expansion and symlinks require a remote identity model
+/// and are deliberately not inferred here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UploadTarget {
+    context_id: String,
+    path: String,
+}
+
+impl UploadTarget {
+    fn new(context_id: &str, path: &str) -> Result<Self, String> {
+        if context_id.is_empty() {
+            return Err("upload destination context may not be empty".into());
+        }
+        validate_remote_path("destination_path", path)?;
+        let (prefix, rest) = if let Some(rest) = path.strip_prefix("~/") {
+            ("~/", rest)
+        } else {
+            ("/", path.trim_start_matches('/'))
+        };
+        let mut components = Vec::new();
+        for component in rest.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => return Err("upload destination_path may not contain .. components".into()),
+                component => components.push(component),
+            }
+        }
+        if components.is_empty() {
+            return Err("upload destination_path may not be the filesystem or home root".into());
+        }
+        Ok(Self {
+            context_id: context_id.into(),
+            path: format!("{prefix}{}", components.join("/")),
+        })
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.context_id == other.context_id
+            && (self.path == other.path
+                || is_remote_descendant(&self.path, &other.path)
+                || is_remote_descendant(&other.path, &self.path))
+    }
+
+    fn from_run(run: &wisp_store::RunRecord) -> Result<Option<Self>, String> {
+        if run.kind != "file_transfer" {
+            return Ok(None);
+        }
+        let target_for_run = |context_id: &str, path: &str| {
+            if context_id != run.context_id {
+                return Err(format!(
+                    "upload Run {} has an inconsistent destination context",
+                    run.id
+                ));
+            }
+            Self::new(context_id, path)
+                .map(Some)
+                .map_err(|error| format!("Cannot verify upload target for Run {}: {error}", run.id))
+        };
+        if let Some(handle) = run
+            .remote_handle_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<TransferHandle>(json).ok())
+        {
+            return match handle {
+                TransferHandle::LocalUpload {
+                    destination_context_id,
+                    destination_path,
+                    ..
+                } => target_for_run(&destination_context_id, &destination_path),
+                _ => Ok(None),
+            };
+        }
+        // Activation precedes handle persistence. The immutable submission
+        // snapshot already identifies an upload if the process stopped there.
+        // A transfer it does not mark as coming from `local` is a download,
+        // relay or harvest (a Files-panel download writes no snapshot at all)
+        // and reserves no upload target.
+        let snapshot =
+            serde_json::from_str::<serde_json::Value>(&run.env_snapshot_json).unwrap_or_default();
+        if snapshot
+            .get("source_context_id")
+            .and_then(|value| value.as_str())
+            != Some("local")
+        {
+            return Ok(None);
+        }
+        let context_id = snapshot
+            .get("destination_context_id")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("upload Run {} has no destination context", run.id))?;
+        let path = snapshot
+            .get("destination_path")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("upload Run {} has no destination path", run.id))?;
+        target_for_run(context_id, path)
+    }
+}
+
+fn is_remote_descendant(path: &str, parent: &str) -> bool {
+    path.strip_prefix(parent)
+        .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+async fn require_upload_target_available(
+    store: &wisp_store::Store,
+    target: &UploadTarget,
+    reservations: &std::collections::HashMap<String, UploadTarget>,
+    except_run_id: Option<&str>,
+) -> Result<(), String> {
+    let conflict = |run_id: &str| {
+        format!(
+            "Upload destination overlaps active Run {run_id}; inspect that Run and retry only after it has stopped"
+        )
+    };
+    for (run_id, existing) in reservations {
+        if Some(run_id.as_str()) != except_run_id && target.overlaps(existing) {
+            return Err(conflict(run_id));
+        }
+    }
+    let persisted = store
+        .list_active_runs_for_context(&target.context_id)
+        .await
+        .map_err(|error| format!("Cannot check active upload destinations: {error}"))?;
+    for run in persisted {
+        if Some(run.id.as_str()) == except_run_id {
+            continue;
+        }
+        if UploadTarget::from_run(&run)?.is_some_and(|existing| target.overlaps(&existing)) {
+            return Err(conflict(&run.id));
+        }
+    }
+    Ok(())
+}
+
 pub async fn persist_transfer_handle(
     store: &wisp_store::Store,
     owner_id: &str,
@@ -1343,6 +1479,42 @@ impl RunManager {
                 .await;
             return Ok(());
         };
+        // The lifecycles below only start a `submitted` Run. One that already
+        // began copying has lost its process: end it, or it stays `running`
+        // for a wait that never returns. A Run this recent may simply not be
+        // registered in `active` by its own submission yet.
+        if matches!(
+            run.status,
+            wisp_store::RunStatus::Running | wisp_store::RunStatus::Cancelling
+        ) && !matches!(handle, TransferHandle::Harvest { .. })
+        {
+            let last_seen = run
+                .last_polled_at
+                .or(run.started_at)
+                .unwrap_or(run.created_at);
+            if chrono::Utc::now().timestamp() - last_seen < ACTIVE_LEASE_SECS {
+                return Ok(());
+            }
+            if run.status == wisp_store::RunStatus::Cancelling {
+                let _ = store
+                    .finish_active_run_owned(
+                        &run.id,
+                        &self.owner_id,
+                        wisp_store::RunStatus::Cancelled,
+                        None,
+                    )
+                    .await;
+                return Ok(());
+            }
+            return self
+                .fail_transfer(
+                    &store,
+                    &run.id,
+                    "transfer was interrupted before it finished; submit it again \
+                     (transport=rsync with resume=true continues from the bytes already copied)",
+                )
+                .await;
+        }
         let timeout = Duration::from_secs(run.timeout_secs.unwrap_or(4 * 60 * 60) as u64);
         let started = Instant::now();
         match handle {
@@ -1353,6 +1525,24 @@ impl RunManager {
                 transport,
                 ..
             } => {
+                let target = match UploadTarget::from_run(run) {
+                    Ok(Some(target)) => target,
+                    Ok(None) => {
+                        return self
+                            .fail_transfer(&store, &run.id, "upload target is missing")
+                            .await
+                    }
+                    Err(error) => return self.fail_transfer(&store, &run.id, &error).await,
+                };
+                let mut targets = self.upload_targets.lock().await;
+                if targets.contains_key(&run.id) {
+                    return Ok(());
+                }
+                if let Err(error) =
+                    require_upload_target_available(&store, &target, &targets, Some(&run.id)).await
+                {
+                    return self.fail_transfer(&store, &run.id, &error).await;
+                }
                 let Some(destination) = store
                     .get_execution_context(&destination_context_id)
                     .await
@@ -1372,7 +1562,13 @@ impl RunManager {
                 let owner_id = self.owner_id.clone();
                 let run_id = run.id.clone();
                 let active = self.active.clone();
+                let upload_targets = self.upload_targets.clone();
                 let cleanup_id = run_id.clone();
+                // All awaited registration locks precede launching the task.
+                // A dropped reclaim future cannot strand a reservation or an
+                // unregistered lifecycle after the process has started.
+                let mut active_runs = self.active.lock().await;
+                targets.insert(run_id.clone(), target);
                 let task_store = store;
                 let task = tokio::spawn(async move {
                     let result = local_upload_lifecycle(
@@ -1393,7 +1589,7 @@ impl RunManager {
                         tracing::warn!(run_id, "reclaimed upload failed: {error}");
                     }
                 });
-                self.active.lock().await.insert(
+                active_runs.insert(
                     cleanup_id.clone(),
                     ActiveRun {
                         abort: task.abort_handle(),
@@ -1402,6 +1598,7 @@ impl RunManager {
                 tokio::spawn(async move {
                     let _ = task.await;
                     active.lock().await.remove(&cleanup_id);
+                    upload_targets.lock().await.remove(&cleanup_id);
                 });
             }
             TransferHandle::LocalDownload {
@@ -1578,6 +1775,7 @@ impl RunManager {
         resume: bool,
         timeout: Duration,
     ) -> Result<SubmitRunResponse, String> {
+        let target = UploadTarget::new(&destination.id, destination_path)?;
         let destination_connection =
             crate::ssh_hosts::SshConnection::from_execution_context(destination)?;
         let item_name = source_path
@@ -1585,6 +1783,10 @@ impl RunManager {
             .and_then(|name| name.to_str())
             .ok_or_else(|| "local source_path has no portable item name".to_string())?
             .to_string();
+        // Keep the scan and registration in one critical section. In particular,
+        // resume=true and a different source cannot admit a second target writer.
+        let mut targets = self.upload_targets.lock().await;
+        require_upload_target_available(&store, &target, &targets, None).await?;
         let run_id = uuid::Uuid::new_v4().to_string();
         let started = Instant::now();
         let mut run = wisp_store::RunRecord::new(
@@ -1655,11 +1857,16 @@ impl RunManager {
         let runner = self.runner.clone();
         let owner_id = self.owner_id.clone();
         let active = self.active.clone();
+        let upload_targets = self.upload_targets.clone();
         let cleanup_id = run_id.clone();
         let task_run_id = run_id.clone();
         let source_path = source_path.to_path_buf();
         let destination_path = destination_path.to_string();
         let task_store = store.clone();
+        // Acquire the remaining registration lock before starting any work:
+        // admission cancellation must not strand a task or target reservation.
+        let mut active_runs = self.active.lock().await;
+        targets.insert(run_id.clone(), target);
         let task = tokio::spawn(async move {
             let result = local_upload_lifecycle(
                 &task_store,
@@ -1680,13 +1887,11 @@ impl RunManager {
             }
         });
         let abort = task.abort_handle();
-        self.active
-            .lock()
-            .await
-            .insert(run_id.clone(), ActiveRun { abort });
+        active_runs.insert(run_id.clone(), ActiveRun { abort });
         tokio::spawn(async move {
             let _ = task.await;
             active.lock().await.remove(&cleanup_id);
+            upload_targets.lock().await.remove(&cleanup_id);
         });
         Ok(SubmitRunResponse {
             run_id,
@@ -2705,6 +2910,8 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex as StdMutex;
+
+    mod upload_target_tests;
 
     #[test]
     fn public_key_parser_accepts_only_the_generated_ed25519_shape() {
@@ -3991,6 +4198,92 @@ mod tests {
             .iter()
             .any(|arg| arg == "alice@a.example:/data/result.txt"));
         drop(commands);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn interrupted_upload_ends_instead_of_staying_running() {
+        let (root, store) = test_store().await;
+        let runner = Arc::new(RecordingRunner {
+            outputs: StdMutex::new(VecDeque::new()),
+            commands: StdMutex::new(Vec::new()),
+        });
+        let manager = RunManager::with_runner(runner.clone());
+        for (id, status, expected) in [
+            (
+                "was-running",
+                wisp_store::RunStatus::Running,
+                wisp_store::RunStatus::Failed,
+            ),
+            (
+                "was-cancelling",
+                wisp_store::RunStatus::Cancelling,
+                wisp_store::RunStatus::Cancelled,
+            ),
+        ] {
+            let mut run = wisp_store::RunRecord::new(id, "p", "ssh:a", "Upload", "file_transfer");
+            run.frame_id = Some("f".into());
+            run.status = status;
+            // Silent for longer than a lease: its process is gone.
+            run.created_at -= 3600;
+            run.remote_handle_json = Some(
+                serde_json::to_string(&TransferHandle::LocalUpload {
+                    source_path: root.join("R1.fastq.gz").to_string_lossy().into_owned(),
+                    destination_context_id: "ssh:a".into(),
+                    destination_path: "/data/R1.fastq.gz".into(),
+                    transport: "rsync".into(),
+                    resume: true,
+                })
+                .unwrap(),
+            );
+            store.create_run(&run).await.unwrap();
+            manager.recover(&store).await.unwrap();
+            let run = store.get_run(id).await.unwrap().unwrap();
+            assert_eq!(run.status, expected, "{id}: {:?}", run.last_poll_error);
+        }
+        let failed = store.get_run("was-running").await.unwrap().unwrap();
+        assert!(failed
+            .last_poll_error
+            .is_some_and(|error| error.contains("interrupted")));
+        assert!(runner.commands.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn unheld_lease_is_reclaimed_instead_of_killing_the_command() {
+        let (root, store) = test_store().await;
+        // Never claimed: to a renewal this reads the same as a lease that
+        // lapsed during a store stall or while the machine slept.
+        let mut run = wisp_store::RunRecord::new("lapsed", "p", "ssh:a", "Upload", "file_transfer");
+        run.frame_id = Some("f".into());
+        run.status = wisp_store::RunStatus::Running;
+        store.create_run(&run).await.unwrap();
+        let runner = RelayRunner {
+            commands: StdMutex::new(Vec::new()),
+        };
+        let output = run_with_lifecycle_lease(
+            &store,
+            "lapsed",
+            "owner",
+            &runner,
+            RunCommand {
+                context_id: "ssh:a".into(),
+                program: "rsync".into(),
+                args: Vec::new(),
+                script: "local upload".into(),
+                cwd: None,
+                stdin: None,
+                envs: Vec::new(),
+            },
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert!(store
+            .finish_active_run_owned("lapsed", "owner", wisp_store::RunStatus::Succeeded, Some(0))
+            .await
+            .unwrap());
         let _ = std::fs::remove_dir_all(root);
     }
 }

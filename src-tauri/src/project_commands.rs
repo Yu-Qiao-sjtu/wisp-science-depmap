@@ -84,6 +84,72 @@ pub(super) async fn add_research_journal_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Memos are read for the window's working project only, so a project hidden
+/// by privacy mode is never reachable by id from the UI.
+async fn memo_project(
+    state: &AppState,
+    window: &crate::workspace_surface::WorkspaceSurface,
+) -> Result<String, String> {
+    let (project, _) =
+        exploration_commands::working_project_for_active_frame(state, window.label()).await?;
+    Ok(project.id)
+}
+
+#[tauri::command]
+pub(super) async fn list_project_memos(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+) -> Result<Vec<wisp_dto::ProjectMemo>, String> {
+    let project_id = memo_project(&state, &window).await?;
+    state
+        .store
+        .list_project_memos(&project_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn add_project_memo(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    input: wisp_dto::ProjectMemoInput,
+) -> Result<wisp_dto::ProjectMemo, String> {
+    let project_id = memo_project(&state, &window).await?;
+    state
+        .store
+        .add_project_memo(&project_id, &input)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn update_project_memo(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    patch: wisp_dto::ProjectMemoPatch,
+) -> Result<wisp_dto::ProjectMemo, String> {
+    let project_id = memo_project(&state, &window).await?;
+    state
+        .store
+        .update_project_memo(&project_id, &patch)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn delete_project_memo(
+    state: State<'_, AppState>,
+    window: crate::workspace_surface::WorkspaceSurface,
+    memo_id: String,
+) -> Result<(), String> {
+    let project_id = memo_project(&state, &window).await?;
+    state
+        .store
+        .delete_project_memo(&project_id, &memo_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub(super) async fn get_research_journey_source(
     state: State<'_, AppState>,
@@ -317,6 +383,11 @@ pub(super) async fn set_active_project(
     label: &str,
     id: &str,
 ) -> Result<(String, String), String> {
+    // Only `open_research_assistant` binds the assistant's hidden project. As
+    // a workspace it would also become this window's project on next launch.
+    if wisp_store::is_assistant_project_id(id) {
+        return Err("The research assistant is not a project workspace.".into());
+    }
     let recovery_projects = state
         .store
         .session_artifact_recovery_projects(id)
@@ -338,6 +409,8 @@ pub(super) async fn set_active_project(
     let root = ap.root.clone();
     state.set_active(label, ap);
     state.set_active_frame(label, None);
+    // The window left the assistant for this project; nothing to restore.
+    state.assistant_windows.write().unwrap().remove(label);
     remember_window_project(&state.store, label, id).await;
     // Extra windows must not steal the main window's restore mapping or the
     // startup workspace display. remember_window_project already skips home-*.
@@ -386,13 +459,16 @@ async fn remember_window_project(store: &Store, label: &str, id: &str) {
 /// project; falls back to the legacy global `active_project_id`.
 pub(crate) async fn startup_main_project_id(store: &Store) -> String {
     let windows = load_window_active_projects(store).await;
-    if let Some(id) = windows.get("main") {
+    // Builds before the `set_active_project` guard could persist the
+    // assistant's hidden project here; never start in it.
+    let restorable = |id: &str| !wisp_store::is_assistant_project_id(id);
+    if let Some(id) = windows.get("main").filter(|id| restorable(id)) {
         if store.get_project(id).await.ok().flatten().is_some() {
             return id.clone();
         }
     }
     match store.get_setting("active_project_id").await.ok().flatten() {
-        Some(id) if store.get_project(&id).await.ok().flatten().is_some() => id,
+        Some(id) if restorable(&id) && store.get_project(&id).await.ok().flatten().is_some() => id,
         _ => "default".to_string(),
     }
 }
@@ -449,7 +525,10 @@ pub(super) async fn restored_window_projects(store: &Store) -> Vec<(String, Stri
     let mut restored = Vec::new();
     for original_id in persisted_windows(store).await {
         let label = project_window_label(&original_id);
-        let id = windows.get(&label).unwrap_or(&original_id);
+        let id = windows
+            .get(&label)
+            .filter(|id| !wisp_store::is_assistant_project_id(id))
+            .unwrap_or(&original_id);
         if store.get_project(id).await.ok().flatten().is_some() {
             restored.push((label, id.clone()));
         } else if store
@@ -1136,6 +1215,9 @@ mod tests {
         assert!(!database.exists());
     }
 
+    /// A damaged database is never treated as a missing one. Opening it sets
+    /// the damaged file aside and rebuilds the database (#1610), and that is
+    /// what the user is told; only the rebuilt database passes the checks.
     #[tokio::test]
     async fn project_deletion_does_not_ignore_corrupt_registered_databases() {
         let root = tempfile::tempdir().unwrap();
@@ -1153,12 +1235,25 @@ mod tests {
             .unwrap();
         let database = workspace.join(wisp_store::PROJECT_DATABASE);
         std::fs::write(&database, b"not a SQLite database").unwrap();
+        let error = validate_project_deletion(&store, "p", true)
+            .await
+            .unwrap_err();
+        assert!(error.contains("project_database_rebuilt:"), "{error}");
+        let damaged: Vec<std::path::PathBuf> = std::fs::read_dir(database.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.to_string_lossy().contains(".corrupt-"))
+            .collect();
+        assert_eq!(damaged.len(), 1, "{damaged:?}");
+        assert_eq!(
+            std::fs::read(&damaged[0]).unwrap(),
+            b"not a SQLite database"
+        );
         for delete_data in [false, true] {
-            assert!(validate_project_deletion(&store, "p", delete_data)
+            validate_project_deletion(&store, "p", delete_data)
                 .await
-                .is_err());
+                .unwrap();
         }
-        assert_eq!(std::fs::read(&database).unwrap(), b"not a SQLite database");
     }
 
     #[tokio::test]
@@ -1513,6 +1608,20 @@ mod tests {
 
         let _ = store
             .set_setting("active_project_id", "missing")
+            .await
+            .unwrap();
+        assert_eq!(startup_main_project_id(&store).await, "default");
+
+        // An earlier build could persist the assistant's hidden project as
+        // main's workspace; it is never restored.
+        let assistant = wisp_store::ASSISTANT_PROJECT_ID;
+        store
+            .create_project(assistant, "Assistant", "")
+            .await
+            .unwrap();
+        remember_window_project(&store, "main", assistant).await;
+        let _ = store
+            .set_setting("active_project_id", assistant)
             .await
             .unwrap();
         assert_eq!(startup_main_project_id(&store).await, "default");

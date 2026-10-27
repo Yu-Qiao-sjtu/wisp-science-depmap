@@ -2,7 +2,9 @@
 
 Settings → Remote Access connects IM bots to the workspace agent: messages you send
 from Feishu or WeChat drive normal agent sessions (visible in the desktop app),
-and the final answer of each turn is sent back to the chat.
+and the final answer of each turn is sent back to the chat. To see the full
+transcript, tool calls and diffs and approve from a browser instead, use
+[Remote web access](remote-access.md).
 
 The **Research assistant → Remote access** entry is a separate, WeChat-only
 connection to the assistant's persistent conversation. It manages visible
@@ -11,8 +13,10 @@ or project-switching commands described below. Bind and enable it separately;
 the same bot cannot be bound to both entries. Its approval replies are `yes`
 (approve once), `no` (reject), and `full` (approve and enable Full Permission
 for the assistant conversation until Wisp restarts or `full off` is sent).
-`/approval` repeats the assistant's pending request; `/status` shows permission
-state. Dispatched project work keeps its own approvals. See
+`/approval` repeats the assistant's pending request; `/status` shows the model
+and permission state. `/model` lists chat models or switches the assistant
+conversation's model, and `/resume` reruns its last failed request. Dispatched
+project work keeps its own approvals. See
 [Research assistant](research-assistant.md#微信远程接入).
 
 The assistant can list a project's conversations, continue a selected one, and
@@ -24,6 +28,12 @@ Project approvals are also supervised in the background: the assistant approves 
 summary remains on the desktop and waits in the active connection until a fresh
 owner message permits delivery. Pending remote notices do not survive disconnect
 or restart. Failures and interrupted turns are reported without claiming success.
+
+A [research mandate](research-mandates.md) that needs the researcher sends
+its request to the same places without being asked: the assistant's
+conversation, the assistant's WeChat binding, and the Feishu bot's bound owner
+(a direct message by `open_id`). Channels that are disabled or unbound are
+skipped; a project hidden by privacy mode sends nothing.
 
 Desktop, Feishu, and WeChat share one durable **IM target project**. Ordinary
 IM messages continue that project's current IM session. Starting work on the
@@ -41,6 +51,10 @@ The IM target can be inspected and changed from either Feishu or WeChat:
 - `/new` prepares a fresh IM session in the selected project.
 - `/stop` cancels the shared target's running turn; `/help` shows the command
   list.
+- `/mandates` lists every visible [research mandate](research-mandates.md)
+  with its status, KPI values, latest round and anything waiting on you. It is
+  answered directly, without a model turn, and also works on the assistant's
+  WeChat entry.
 - WeChat additionally supports `/approval`, `/approve <code>`, and
   `/reject <code> [feedback]` for text-only tool approval.
 
@@ -57,9 +71,15 @@ Only plain text input is supported in v1 (WeChat voice messages arrive as
 transcripts and work too). Approval prompts still appear in the desktop app. A
 WeChat turn that reaches a native Wisp confirmation or an ACP permission request
 also receives a bounded plain-text summary and a one-time approval code; Feishu
-approvals still require the desktop app. Project IM turns additionally force Ask on
-write/edit/shell and other mutating tools even when the desktop policy defaults
-to Allow, including Full Permission.
+approvals still require the desktop app. Project IM turns default to Ask on
+write/edit/shell, `run_in_context` and other mutating tools even when the project
+policy defaults to Allow. Explicitly enabling **Full Permission** for that same
+conversation on the desktop releases its pending ordinary tool approval and
+skips subsequent ordinary prompts, including during the current IM turn.
+Disabling it restores approval prompts; restarting Wisp clears the grant.
+Dispatching from an assistant or parent conversation does not transfer its grant
+to the target conversation. Explicit tool denials, mandate review constraints
+and lab-mail approvals remain in force.
 
 ## Feishu bot
 

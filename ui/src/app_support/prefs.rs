@@ -247,6 +247,7 @@ pub(crate) struct AppPrefsPatch {
     pub locale: Option<String>,
     pub max_iter: Option<i64>,
     pub auto_compact: Option<bool>,
+    pub auto_compact_percent: Option<u64>,
     pub semantic_compact_on_model_switch: Option<bool>,
     pub semantic_compact_idle_hours: Option<u64>,
     pub auto_continue: Option<bool>,
@@ -255,6 +256,8 @@ pub(crate) struct AppPrefsPatch {
     pub resume_last_session: Option<bool>,
     pub decentralized_project_storage: Option<bool>,
     pub notifications_enabled: Option<bool>,
+    pub notification_sound_enabled: Option<bool>,
+    pub notification_sound: Option<String>,
 }
 
 pub(crate) fn parse_app_prefs_payload(payload: &serde_json::Value) -> AppPrefsPatch {
@@ -317,6 +320,9 @@ pub(crate) fn parse_app_prefs_payload(payload: &serde_json::Value) -> AppPrefsPa
         auto_compact: payload
             .get("auto_compact")
             .and_then(|value| value.as_bool()),
+        auto_compact_percent: payload
+            .get("auto_compact_percent")
+            .and_then(|value| value.as_u64()),
         semantic_compact_on_model_switch: payload
             .get("semantic_compact_on_model_switch")
             .and_then(|value| value.as_bool()),
@@ -341,6 +347,13 @@ pub(crate) fn parse_app_prefs_payload(payload: &serde_json::Value) -> AppPrefsPa
         notifications_enabled: payload
             .get("notifications_enabled")
             .and_then(|value| value.as_bool()),
+        notification_sound_enabled: payload
+            .get("notification_sound_enabled")
+            .and_then(|value| value.as_bool()),
+        notification_sound: payload
+            .get("notification_sound")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -406,6 +419,9 @@ pub(crate) fn apply_prefs_patch(
         if let Some(value) = patch.auto_compact {
             cfg.auto_compact = value;
         }
+        if let Some(value) = patch.auto_compact_percent {
+            cfg.auto_compact_percent = value;
+        }
         if let Some(value) = patch.semantic_compact_on_model_switch {
             cfg.semantic_compact_on_model_switch = value;
         }
@@ -429,6 +445,12 @@ pub(crate) fn apply_prefs_patch(
         }
         if let Some(value) = patch.notifications_enabled {
             cfg.notifications_enabled = value;
+        }
+        if let Some(value) = patch.notification_sound_enabled {
+            cfg.notification_sound_enabled = value;
+        }
+        if let Some(value) = &patch.notification_sound {
+            cfg.notification_sound = value.clone();
         }
     });
 }
@@ -893,6 +915,18 @@ mod app_prefs_payload_tests {
             patch.custom_css.as_deref(),
             Some(":root { --md-lead-bar-width: 0; }")
         );
+    }
+
+    #[test]
+    fn parses_notification_sound_from_configure_payload() {
+        let payload = serde_json::json!({
+            "notification_sound_enabled": true,
+            "notification_sound": "Ping"
+        });
+        let patch = parse_app_prefs_payload(&payload);
+        assert_eq!(patch.notification_sound_enabled, Some(true));
+        assert_eq!(patch.notification_sound.as_deref(), Some("Ping"));
+        assert_eq!(patch.notifications_enabled, None);
     }
 }
 

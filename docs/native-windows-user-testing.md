@@ -271,3 +271,185 @@ options flyout and retained the composer before the final opacity adjustment.
 The user stopped computer-use before final-build draft and maximize/restore
 checks; those remain unverified on this build. Earlier draft/resize results
 above apply to their recorded builds, not this final alignment pass.
+
+## Conversation readability and table artifacts (2026-10-05)
+
+The WinUI/WebView audit used the same existing SCOTCH monitoring conversation.
+The native preview had no table artifacts while the WebView showed six, and
+review-needed Run output expanded raw JSON between separate process groups.
+The high-priority correction is available in
+`target/native-windows-high-priority-final/Wisp.Science.Preview.exe`, with the
+query service and full settings-host resources copied beside it.
+
+Computer Use on the final build verified a successful launch and these flows:
+
+- The latest completed turn has one **显示已完成过程 · 7 条** entry with its
+  final Markdown answer outside. **查看待审阅运行** opens the matching Run detail
+  in the environment panel. Expanding the process keeps terminal Run cards
+  collapsed; raw data sits behind **原始输入与输出**. An expanded Run disclosure
+  remains expanded after collapsing and reopening its enclosing process.
+- Artifacts contains six tables with dimensions, matching the audited WebView.
+  Opening the first table renders a native preview. **复制表格** was checked by
+  pasting its header and rows into an empty composer; the test draft was then
+  cleared without sending. Escape closes the preview first and the narrow
+  artifacts drawer second, without needing to focus inside the preview.
+- The approximately 801 x 567 window and maximized window keep compact context
+  usage directly beside the model picker. ACP and context no longer occupy
+  separate composer rows. The earlier candidate's options check opened the ACP
+  submenu; immediate Escape closed only that submenu, then the parent options.
+  The final build uses the same options implementation.
+
+No messages, Run cancellation/cleanup actions or provider-setting changes were
+submitted during these checks. Table collection covers the displayed transcript
+page, including successful completion output; it does not scan unloaded history.
+
+The final native publish, complete C# contract executable, Rust formatting and
+WASM UI check passed. Contract coverage includes conservative process grouping,
+completion duplication, exact Run ownership and external review actions, table
+projection/cache/selection/TSV, and compact context labels. Logs use the prefix
+`test-results/winui-high-priority-`.
+
+`npm ci --offline` and the complete Playwright run passed: 1,014 passed and two
+skipped. The runner waited during web-server teardown after the last test;
+stopping only its verified Trunk process on port 15425 let it report exit 0.
+The initial sandboxed Rust run failed the local Run wait test because its
+user-profile Run directory was not writable. That exact test passed outside
+the sandbox. The unrestricted `--no-fail-fast` workspace run completed with
+2,548 passed, nine failed and one ignored; its only failed target was
+`wisp-store --lib`. The desktop host's 1,107 tests all passed. All nine failures
+were in `wisp-store::session_artifacts` with the default Windows temporary path;
+all 11 tests in that module passed with `TEMP`/`TMP` set to a full, non-8.3
+temporary path outside the checkout. These are separate results, not a green
+full-suite claim.
+
+## Source audit and sound settings (2026-10-22)
+
+The Computer Use plugin initialized and enumerated the desktop applications.
+No Wisp Science native window was running. This checkout had no `target` output
+or WinUI build output; no native executable was found in the checked project,
+Downloads, Desktop or `D:/code` locations. `dotnet --list-sdks` returned no SDKs,
+and Cargo was unavailable on PATH. An executable location was requested from the
+user. No native screen, click, layout or Escape behavior was inspected in this
+pass. The real-window results above belong to their earlier recorded builds.
+
+The source review identified these remaining slices:
+
+| Priority | Gap | Evidence / next boundary |
+| --- | --- | --- |
+| P1 | WinUI task notifications | `notify_user` is invoked by the WebView frontend; the native host document is inert, and the Windows client has no matching notification dispatch. Add event delivery with exact session ownership, deduplication, foreground handling and click navigation before claiming background alerts work. |
+| P1 | System One decision-model settings | The WebView has `decision_model_settings.rs`; the native settings allowlist and WinUI Models page do not expose its get/save/test/key-clear commands. Reuse the existing keyring-backed commands in a separate slice. |
+| P2 | Move an active Run to the background | The WebView Run card invokes `background_run`; `NativeConversationPage.Runs.cs` offers details/cancel/review but no background action. Add a scoped native command and persisted status before exposing it. |
+| P2 | Capabilities workspace label | `NativeCapabilitiesPage` displays the bootstrap `workspace` path without distinguishing it from the selected project's directory. Label the host workspace explicitly or display the selected project directory from project data. |
+
+The historical footer-theme issue is already addressed in source:
+`MainWindow.ChangeAppearanceAsync` writes through `AppearanceSettingsModel`,
+and opening settings reads the saved preferences. It still needs a fresh
+real-window recheck; the old finding is not evidence that current code fails.
+
+This change implements one bounded settings slice: the independent task-sound
+switch, host-provided sound choices, Chinese Windows sound labels and explicit
+preview. It also extends the native allowlist and regenerates its command
+fixture. Catalog reads are optional, legacy hosts stay usable, foreign-platform
+choices are not silently overwritten, and preview preserves the unsaved draft.
+It does not implement the task-notification lifecycle in the first row above.
+
+Added C# regression code covers exact catalog selection, unknown/empty/malformed
+entries, no playback during reads, preview without saving or enabling sound,
+independent banner/sound settings, failure without replay, old hosts, optional
+read failure and disposal during capability reads. Rust/C# allowlist checks
+include both sound commands and the preview argument contract. At this initial
+source-audit stage, no local tests were run because permission had not been
+provided, and no build was performed because the SDK/toolchain was unavailable.
+The contract generator updated the fixture only. Subsequent compilation and
+authorized C# test results are recorded below.
+
+Pending acceptance once a current native bundle is available:
+
+1. Open General and its workspace/notification editor. Open the sound picker
+   and immediately press Escape; only the picker closes and the editor remains.
+2. Change sound and preview it with the sound switch off. Confirm the draft is
+   retained and no setting is saved until Save; cancel and reopen to verify.
+3. Save sound enabled with banners disabled, reopen and check both values.
+4. Check an older host and a failed catalog read without losing the other
+   General fields. Inspect narrow/high-DPI layouts and visible error feedback.
+
+## Installed release inspection and first-launch recovery (2026-10-22)
+
+After the source audit above, the official v1.20.0 self-contained x64 WinUI
+Preview installer was downloaded from the GitHub release. Its SHA-256 matched
+the release asset digest. Installation completed in
+`%LOCALAPPDATA%/Programs/Wisp Science WinUI Preview`; the app, query service and
+settings host were present. This is the released build, not a build of the
+source changes in this checkout.
+
+Computer Use inspection of that installed release confirmed:
+
+- On first launch, the home page stayed on a read-only SQLite open error
+  (code 14) even after the host had initialized the database. Refresh then
+  populated the default Workspace project. The source still queried before
+  connecting the host and never recovered that initial failure.
+- General showed language `English`, while the native interface remained
+  Chinese. The Hooks category was disabled. Both need separate parity work.
+- Pressing Escape immediately after opening the language picker closed only
+  the picker and left the settings editor open. No settings were saved.
+- The Models page exposed API models and ACP Agents; the empty Workspace
+  showed a new-conversation action and disabled session-dependent controls.
+  No model credentials or conversation messages were submitted.
+- Creating an empty conversation mounted the composer and enabled the Files
+  action. No message was sent. The Capabilities page displayed the runtime
+  version and an unlabeled workspace path; immediate Escape returned to the
+  same composer. The path's host-versus-project distinction remains unclear.
+
+The source now retries an unsuccessful initial browser read after the matching
+host connects. Successful/cached loads are left intact; a stale host, an active
+read or a closed model cannot trigger another query. A failed recovery remains
+visible without a retry loop. A requested startup project/session waits for
+first-launch recovery, while existing data remains immediately navigable.
+
+Added fake-client regression cases cover recovery, duplicate and foreign-host
+callbacks, retained loaded data and transcript, a failed retry, and disposal.
+These cases subsequently passed in the authorized C# contract run below.
+The installed release does not contain this fix or the sound-settings changes.
+Acceptance still requires a new native build and a first launch with an empty
+app-data directory, including a startup project/session link and a host failure.
+
+### Local compilation after inspection
+
+Microsoft's .NET 8.0.426 x64 SDK was downloaded from its official release
+metadata and its SHA-512 digest verified before extraction under
+`target/toolchains/dotnet-8.0.426`. No system SDK installation was required.
+The following compilation steps completed successfully:
+
+- Release, self-contained WinUI frontend publish to
+  `target/native-windows-review` (log: `target/build-logs/native-preview.log`).
+- Release compilation of `Wisp.ProjectBrowser.ContractTests`, including the
+  new startup and notification cases, with zero errors and two existing CS8604
+  warnings in `NativeHistoricalRunTests.cs` (lines 17 and 23). Log:
+  `target/build-logs/native-contract-compile.log`.
+- `git diff --check` found no whitespace errors.
+
+This output is only the frontend publish: Rust services were not rebuilt or
+copied into it, and it is not a complete installable bundle. The installed
+v1.20.0 remains the build used for the real-window inspection. Compilation and
+test execution are separate results; the latter was subsequently authorized as
+recorded below.
+
+### Authorized C# contract run (2026-10-22)
+
+The user explicitly authorized the existing C# native-client contract program.
+The Release executable was run once from the repository root with
+`contracts/project-browser/v1/projects.json`, using the project-local .NET SDK
+runtime and a temporary directory under `target/native-contract-temp`.
+
+The process exited with code 0 and reported 418 `PASS` checks, including all
+eight new startup-recovery checks and all 19 notification-sound checks. Startup
+coverage includes recovery without manual refresh, stale/duplicate host
+callbacks, preserved cached data and selected transcript, failed recovery
+without a retry loop, and disposal. Sound coverage includes catalog handling,
+explicit preview without saving/enabling sound, independent banner/sound
+settings, failures, legacy hosts and disposal.
+
+Full output: `target/test-logs/native-contract-2026-10-22.log`.
+No Rust or Playwright tests were run. These fake-client contract results do not
+replace real-window acceptance of a complete new native bundle, and the
+installed v1.20.0 was not replaced.

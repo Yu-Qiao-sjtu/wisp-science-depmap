@@ -82,11 +82,9 @@ impl BridgeServer {
         let store = Store::open(&cfg.app_data.join("wisp.sqlite"))
             .await
             .context("open Wisp store for MCP bridge")?;
-        crate::network::apply(
-            &crate::network::load(&store)
-                .await
-                .map_err(anyhow::Error::msg)?,
-        );
+        crate::network::restore(&store)
+            .await
+            .map_err(anyhow::Error::msg)?;
         let run_manager = run_context::RunManager::new();
         run_manager
             .recover(&store)
@@ -201,8 +199,10 @@ impl BridgeServer {
             tools.push(ask_user_tool_schema());
         }
         if let Some(frame_id) = self.cfg.frame_id.as_deref() {
+            // Delegation is always available to a conversation-bound bridge,
+            // except inside a workflow child, which only has nested capacity.
             let session_enabled =
-                crate::delegation_runtime::session_delegation_enabled(&self.store, frame_id).await;
+                !crate::delegation_tool::is_delegated_child_frame(&self.store, frame_id).await;
             let nested_enabled =
                 crate::delegation_tool::nested_delegation_available(&self.store, frame_id).await;
             let nested_result_access =
@@ -729,8 +729,7 @@ impl BridgeServer {
         let (delegation_enabled, result_access) = match self.cfg.frame_id.as_deref() {
             Some(frame_id) => {
                 let session =
-                    crate::delegation_runtime::session_delegation_enabled(&self.store, frame_id)
-                        .await;
+                    !crate::delegation_tool::is_delegated_child_frame(&self.store, frame_id).await;
                 let nested =
                     crate::delegation_tool::nested_delegation_available(&self.store, frame_id)
                         .await;
@@ -1380,7 +1379,7 @@ impl ToolEnv for BridgeToolEnv {
     async fn emit(&self, _event: ToolEvent) {}
 }
 
-fn sanitize_tool_part(raw: &str) -> String {
+pub(crate) fn sanitize_tool_part(raw: &str) -> String {
     let mut out = String::new();
     for ch in raw.chars() {
         if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
@@ -2144,7 +2143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dynamic_delegation_tools_are_listed_only_when_the_session_opted_in() {
+    async fn dynamic_delegation_tools_are_listed_for_conversation_bound_bridges() {
         let base =
             std::env::temp_dir().join(format!("wisp_mcp_delegation_{}", uuid::Uuid::new_v4()));
         let project_root = base.join("project");
@@ -2172,17 +2171,6 @@ mod tests {
             .await
             .unwrap();
 
-        let disabled = server.tools_list().await.unwrap();
-        assert!(!disabled.to_string().contains("wisp_delegate_tasks"));
-        assert!(!disabled.to_string().contains("wisp_get_delegated_result"));
-        crate::delegation_runtime::save_session_delegation_enabled(
-            &server.store,
-            "project-a",
-            "frame-a",
-            true,
-        )
-        .await
-        .unwrap();
         let enabled = server.tools_list().await.unwrap();
         assert!(enabled.to_string().contains("wisp_delegate_tasks"));
         assert!(enabled.to_string().contains("wisp_get_delegated_result"));

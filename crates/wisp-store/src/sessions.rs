@@ -1,7 +1,7 @@
 use super::context_epochs::{HEAD_EPOCH_ROWS, LIVE_LOG_ROWS};
 use super::{
     parse_role, session_display_title, MessageResourceLink, RecentSessionDetail,
-    SessionSearchResult, Store,
+    SessionSearchOptions, SessionSearchResult, Store,
 };
 use anyhow::Result;
 use chrono::{Datelike, Duration, Local};
@@ -206,6 +206,15 @@ pub struct SessionBranchLink {
     pub merge_summary: Option<String>,
 }
 
+/// A live branch or subagent conversation nested under another conversation,
+/// directly or through intermediate branches and subagents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionDescendant {
+    pub id: String,
+    /// Started by its parent's agent (#1061) rather than branched by the user.
+    pub subagent: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SessionBranchMergePreview {
     pub main_session_id: String,
@@ -399,6 +408,27 @@ pub(crate) const SESSION_UI_STDOUT_REPLAY_MAX_CHARS: usize = 64 * 1024;
 const RECENT_TURN_PREVIEW_MAX_CHARS: usize = 20_000;
 pub(crate) const RECENT_TURN_TOOL_PREVIEW_MAX_CHARS: usize = 4_000;
 
+/// Branches and subagents are conversations of their own. Without their
+/// parent they stand alone: a subagent nobody can instruct any more becomes
+/// writable, and a branch loses its merge target. Exploration frames keep
+/// their lineage; their round owns them.
+async fn detach_child_rows(tx: &mut Transaction<'_, Sqlite>, frame_id: &str) -> Result<()> {
+    sqlx::query("UPDATE frames SET dispatched_from=NULL WHERE dispatched_from=? AND id<>?")
+        .bind(frame_id)
+        .bind(frame_id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "UPDATE frames SET branched_from=NULL,branch_point_user_index=NULL,\
+         branch_point_kind=NULL WHERE branched_from=? AND id<>? AND exploration_id IS NULL",
+    )
+    .bind(frame_id)
+    .bind(frame_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Delete every database row owned by a conversation. Legacy databases do not
 /// consistently enable SQLite foreign keys, so the cascade must be explicit.
 /// Runs are project-level records and survive, but their stale frame reference
@@ -413,7 +443,8 @@ async fn delete_session_rows(
         // activity guard. Check versions again under SQLite's writer lock.
         plan.validate_records(tx, frame_id).await?;
     }
-    let mut ids = super::session_artifacts::disposable_ids(tx, frame_id).await?;
+    let co_deleted = artifacts.map_or(&[][..], |plan| &plan.co_deleted);
+    let mut ids = super::session_artifacts::disposable_ids(tx, frame_id, co_deleted).await?;
     if let Some(plan) = artifacts {
         let planned = plan.ids();
         if planned.iter().any(|id| !ids.contains(id)) {
@@ -471,6 +502,12 @@ async fn delete_session_rows(
     .bind(frame_id)
     .execute(&mut **tx)
     .await?;
+    sqlx::query("DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE replace_previous_turn=1 AND frame_id IN (SELECT id FROM frames WHERE root_frame_id=?))")
+        .bind(frame_id).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM schedules WHERE replace_previous_turn=1 AND frame_id IN (SELECT id FROM frames WHERE root_frame_id=?)")
+        .bind(frame_id).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM session_timer_turns WHERE frame_id IN (SELECT id FROM frames WHERE root_frame_id=?)")
+        .bind(frame_id).execute(&mut **tx).await?;
     sqlx::query(
         "UPDATE schedules SET frame_id=NULL \
          WHERE frame_id IN (SELECT id FROM frames WHERE root_frame_id=?)",
@@ -507,6 +544,7 @@ async fn delete_session_rows(
             .execute(&mut **tx)
             .await?;
     }
+    detach_child_rows(tx, frame_id).await?;
     // An Artifact promoted into Run lineage is project evidence, no longer
     // disposable Session state. Keep its root frame as an invisible ownership
     // tombstone because the legacy Artifact schema requires a frame FK. Session
@@ -560,6 +598,62 @@ impl Store {
         .await?)
     }
 
+    /// Every live branch and subagent under a conversation, deepest first so
+    /// each can be deleted before the conversation it hangs from.
+    pub async fn list_session_descendants(
+        &self,
+        frame_id: &str,
+        project_id: &str,
+    ) -> Result<Vec<SessionDescendant>> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.list_session_descendants(frame_id, project_id)).await;
+        }
+        // The depth cap terminates malformed cyclic links.
+        let rows: Vec<(String, bool)> = sqlx::query_as(
+            "WITH RECURSIVE family(id, depth) AS ( \
+                SELECT id, 0 FROM frames WHERE id=? AND project_id=? AND parent_frame_id=id \
+                UNION \
+                SELECT f.id, family.depth + 1 FROM frames f JOIN family \
+                    ON f.branched_from=family.id OR f.dispatched_from=family.id \
+                WHERE f.project_id=? AND f.parent_frame_id=f.id AND f.exploration_id IS NULL \
+                  AND f.status<>'deleted' AND family.depth < 32 \
+             ) SELECT f.id, f.dispatched_from IS NOT NULL FROM family JOIN frames f ON f.id=family.id \
+             WHERE family.id<>? GROUP BY f.id ORDER BY MAX(family.depth) DESC, f.id",
+        )
+        .bind(frame_id)
+        .bind(project_id)
+        .bind(project_id)
+        .bind(frame_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, subagent)| SessionDescendant { id, subagent })
+            .collect())
+    }
+
+    /// Let a conversation's direct branches and subagents stand alone, so the
+    /// conversation can be deleted without them.
+    pub async fn detach_session_children(&self, frame_id: &str, project_id: &str) -> Result<()> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.detach_session_children(frame_id, project_id)).await;
+        }
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM frames WHERE id=? AND project_id=? AND parent_frame_id=id)",
+        )
+        .bind(frame_id)
+        .bind(project_id)
+        .fetch_one(&self.pool)
+        .await?;
+        if !exists {
+            anyhow::bail!("Session not found");
+        }
+        let mut tx = self.begin_write().await?;
+        detach_child_rows(&mut tx, frame_id).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn list_project_frame_ids(&self, project_id: &str) -> Result<Vec<String>> {
         if let Some(store) = self.route_project(project_id).await? {
             return Box::pin(store.list_project_frame_ids(project_id)).await;
@@ -581,6 +675,20 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.map(|value| value.0))
+    }
+
+    /// Conversation operations must not revive ownership tombstones retained
+    /// for artifacts or Runs. Lineage readers still use `frame_project_id`.
+    pub async fn live_frame_project_id(&self, frame_id: &str) -> Result<Option<String>> {
+        if let Some(store) = self.route_entity("frames", "id", frame_id).await? {
+            return Box::pin(store.live_frame_project_id(frame_id)).await;
+        }
+        Ok(
+            sqlx::query_scalar("SELECT project_id FROM frames WHERE id=? AND status<>'deleted'")
+                .bind(frame_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
     }
 
     /// The root conversation that most recently accepted a user message,
@@ -681,7 +789,8 @@ impl Store {
     }
 
     /// Last message role and unseen flag per saved session in a project (for
-    /// dashboard counts).
+    /// dashboard counts). Exploration frames have their own sidebar surface and
+    /// are excluded, just as in session search and recent conversations.
     ///
     /// Deliberately requires a user turn, unlike `list_sessions_page` (#888):
     /// a message-less draft has no last role, and `last_role_needs_you(None)`
@@ -699,6 +808,7 @@ impl Store {
                 (SELECT COALESCE(MAX(ts), f.updated_at) FROM messages m WHERE m.frame_id = f.id) > f.seen_at AS unseen \
              FROM frames f \
              WHERE f.project_id = ? AND f.parent_frame_id = f.id \
+               AND f.exploration_id IS NULL \
                AND {used}",
             used = format!("({SESSION_HAS_USER_TURN_SQL}) AND ({})", self.session_shelved_sql(Some(false)).await?),
         );
@@ -1293,6 +1403,11 @@ async fn replace_message_rows(
     frame_id: &str,
     msgs: &[Message],
 ) -> Result<()> {
+    // A wholesale rewrite gives every message a new seq identity.
+    sqlx::query("DELETE FROM session_timer_turns WHERE frame_id=?")
+        .bind(frame_id)
+        .execute(&mut **tx)
+        .await?;
     sqlx::query("DELETE FROM message_resource_links WHERE frame_id=?")
         .bind(frame_id)
         .execute(&mut **tx)
@@ -1442,6 +1557,15 @@ async fn truncate_message_rows(
     frame_id: &str,
     keep: i64,
 ) -> Result<()> {
+    // Rewind may remove the timer itself and later reuse its seq numbers.
+    // Never let an obsolete ownership range delete newly written human turns.
+    sqlx::query(
+        "DELETE FROM session_timer_turns WHERE frame_id=? AND COALESCE(end_seq,start_seq)>?",
+    )
+    .bind(frame_id)
+    .bind(keep)
+    .execute(&mut **tx)
+    .await?;
     sqlx::query("DELETE FROM message_resource_links WHERE frame_id=? AND message_seq>?")
         .bind(frame_id)
         .bind(keep)
@@ -2158,6 +2282,40 @@ impl Store {
         )
         .bind(frame_id)
         .bind(presentation_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Retrieve one presentation family without a later swarm progress card
+    /// hiding an unrelated MCP App, or vice versa.
+    pub async fn load_latest_session_presentation(
+        &self,
+        frame_id: &str,
+        presentation_kind: &str,
+    ) -> Result<Option<String>> {
+        if let Some(store) = self.route_entity("frames", "id", frame_id).await? {
+            return Box::pin(store.load_latest_session_presentation(frame_id, presentation_kind))
+                .await;
+        }
+        Ok(sqlx::query_scalar(
+            "SELECT event_json FROM session_ui_events WHERE frame_id=? AND json_extract(event_json,'$.kind')='ToolPresentation' AND json_extract(event_json,'$.presentation_kind')=? ORDER BY seq DESC LIMIT 1",
+        ).bind(frame_id).bind(presentation_kind).fetch_optional(&self.pool).await?)
+    }
+
+    /// How the conversation's most recent turn ended: `Done`, `Error`, or
+    /// `None` when no turn end was recorded.
+
+    /// How the conversation's most recent turn ended: `Done`, `Error`, or
+    /// `None` when no turn end was recorded.
+    pub async fn last_turn_outcome(&self, frame_id: &str) -> Result<Option<String>> {
+        if let Some(store) = self.route_entity("frames", "id", frame_id).await? {
+            return Box::pin(store.last_turn_outcome(frame_id)).await;
+        }
+        Ok(sqlx::query_scalar(
+            "SELECT json_extract(event_json,'$.kind') FROM session_ui_events WHERE frame_id=? \
+             AND json_extract(event_json,'$.kind') IN ('Done','Error') ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(frame_id)
         .fetch_optional(&self.pool)
         .await?)
     }
@@ -2896,12 +3054,35 @@ impl Store {
         Ok(())
     }
 
+    /// Display title of one conversation as the sidebar shows it: the custom
+    /// title when set, else the first user message, else `None` for a frame
+    /// that does not exist or has no user turn yet.
+    pub async fn session_title(&self, frame_id: &str) -> Result<Option<String>> {
+        if let Some(store) = self.route_entity("frames", "id", frame_id).await? {
+            return Box::pin(store.session_title(frame_id)).await;
+        }
+        let row = sqlx::query(
+            "SELECT f.title AS custom_title, \
+             (SELECT content FROM messages m WHERE m.frame_id=f.id AND m.role='user' \
+              ORDER BY m.seq LIMIT 1) AS first_user \
+             FROM frames f WHERE f.id=?",
+        )
+        .bind(frame_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let title = session_display_title(row.try_get("custom_title")?, row.try_get("first_user")?);
+        Ok((!title.trim().is_empty()).then_some(title))
+    }
+
     pub async fn list_folders(&self, project_id: &str) -> Result<Vec<(String, String, i64)>> {
         if let Some(store) = self.route_project(project_id).await? {
             return Box::pin(store.list_folders(project_id)).await;
         }
         let rows = sqlx::query(
-            "SELECT id, name, created_at FROM folders WHERE project_id=? ORDER BY created_at ASC",
+            "SELECT id, name, created_at FROM folders WHERE project_id=? ORDER BY position ASC, created_at ASC",
         )
         .bind(project_id)
         .fetch_all(&self.pool)
@@ -2926,16 +3107,38 @@ impl Store {
             anyhow::bail!("Folder name cannot be empty");
         }
         let now = chrono::Utc::now().timestamp();
+        // New folders land after every existing one, reordered or not.
         sqlx::query(
-            "INSERT INTO folders(id, project_id, name, created_at, updated_at) VALUES(?,?,?,?,?)",
+            "INSERT INTO folders(id, project_id, name, created_at, updated_at, position) \
+             VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(position)+1, 0) FROM folders WHERE project_id=?))",
         )
         .bind(id)
         .bind(project_id)
         .bind(name)
         .bind(now)
         .bind(now)
+        .bind(project_id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Persist the sidebar's folder order: `ids` lists the project's folders
+    /// top to bottom. Unknown ids are ignored; folders left out keep their slot.
+    pub async fn reorder_folders(&self, project_id: &str, ids: &[String]) -> Result<()> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.reorder_folders(project_id, ids)).await;
+        }
+        let mut tx = self.begin_write().await?;
+        for (position, id) in ids.iter().enumerate() {
+            sqlx::query("UPDATE folders SET position=? WHERE id=? AND project_id=?")
+                .bind(position as i64)
+                .bind(id)
+                .bind(project_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2996,6 +3199,59 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Mark a conversation as a subagent of `parent_id` (#1061): that
+    /// conversation's agent started it and is the only one that instructs it.
+    pub async fn set_session_dispatched_from(&self, frame_id: &str, parent_id: &str) -> Result<()> {
+        if let Some(store) = self.route_entity("frames", "id", frame_id).await? {
+            return Box::pin(store.set_session_dispatched_from(frame_id, parent_id)).await;
+        }
+        sqlx::query(
+            "UPDATE frames SET dispatched_from=?, \
+             folder_id=(SELECT parent.folder_id FROM frames parent \
+                        WHERE parent.id=? AND parent.project_id=frames.project_id) WHERE id=?",
+        )
+        .bind(parent_id)
+        .bind(parent_id)
+        .bind(frame_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The conversation whose agent started this subagent conversation.
+    pub async fn session_dispatched_from(&self, frame_id: &str) -> Result<Option<String>> {
+        if let Some(store) = self.route_entity("frames", "id", frame_id).await? {
+            return Box::pin(store.session_dispatched_from(frame_id)).await;
+        }
+        Ok(
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT dispatched_from FROM frames WHERE id=?",
+            )
+            .bind(frame_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .flatten(),
+        )
+    }
+
+    /// `subagent → parent` for every subagent conversation in a project.
+    pub async fn list_dispatched_sessions(
+        &self,
+        project_id: &str,
+    ) -> Result<HashMap<String, String>> {
+        if let Some(store) = self.route_project(project_id).await? {
+            return Box::pin(store.list_dispatched_sessions(project_id)).await;
+        }
+        Ok(sqlx::query_as::<_, (String, String)>(
+            "SELECT id,dispatched_from FROM frames WHERE project_id=? AND dispatched_from IS NOT NULL",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .collect())
     }
 
     /// Mark a branch created by the current checkpoint-aware flow, inheriting
@@ -3295,11 +3551,13 @@ impl Store {
         let now = chrono::Utc::now().timestamp();
         let n = sqlx::query(
             // Move the persisted subtree, including descendants outside the loaded
-            // sidebar page. UNION also terminates malformed cyclic branch links.
+            // sidebar page. Subagents move with their parent just like branches.
+            // UNION also terminates malformed cyclic links.
             "WITH RECURSIVE family(id) AS ( \
                 SELECT id FROM frames WHERE id=? AND project_id=? AND parent_frame_id=id \
                 UNION \
-                SELECT f.id FROM frames f JOIN family ON f.branched_from=family.id \
+                SELECT f.id FROM frames f JOIN family \
+                    ON f.branched_from=family.id OR f.dispatched_from=family.id \
                 WHERE f.project_id=? AND f.parent_frame_id=f.id AND f.exploration_id IS NULL \
              ) UPDATE frames SET folder_id=?, updated_at=? WHERE id IN (SELECT id FROM family)",
         )
@@ -3326,14 +3584,66 @@ impl Store {
         session_id: Option<&str>,
         preferred_project_id: Option<&str>,
     ) -> Result<Vec<SessionSearchResult>> {
+        self.search_sessions_excluding_projects(
+            project_id,
+            query,
+            limit,
+            session_id,
+            preferred_project_id,
+            &[],
+        )
+        .await
+    }
+
+    /// Apply project visibility before ranking/limiting, preserving the same
+    /// title/body and activity ordering across local and routed project stores.
+    pub async fn search_sessions_excluding_projects(
+        &self,
+        project_id: Option<&str>,
+        query: &str,
+        limit: i64,
+        session_id: Option<&str>,
+        preferred_project_id: Option<&str>,
+        excluded_project_ids: &[String],
+    ) -> Result<Vec<SessionSearchResult>> {
+        self.search_sessions_with_options(
+            project_id,
+            query,
+            limit,
+            session_id,
+            preferred_project_id,
+            excluded_project_ids,
+            SessionSearchOptions::default(),
+        )
+        .await
+    }
+
+    /// The full session search: project visibility and the shelved filter are
+    /// applied before ranking/limiting. A keyword search may opt into shelved
+    /// sessions; the empty-query recent list never includes them.
+    pub async fn search_sessions_with_options(
+        &self,
+        project_id: Option<&str>,
+        query: &str,
+        limit: i64,
+        session_id: Option<&str>,
+        preferred_project_id: Option<&str>,
+        excluded_project_ids: &[String],
+        options: SessionSearchOptions,
+    ) -> Result<Vec<SessionSearchResult>> {
         if let Some(project_id) = project_id {
+            if excluded_project_ids.iter().any(|id| id == project_id) {
+                return Ok(Vec::new());
+            }
             if let Some(store) = self.route_project(project_id).await? {
-                return Box::pin(store.search_sessions(
+                return Box::pin(store.search_sessions_with_options(
                     Some(project_id),
                     query,
                     limit,
                     session_id,
                     preferred_project_id,
+                    excluded_project_ids,
+                    options,
                 ))
                 .await;
             }
@@ -3342,12 +3652,14 @@ impl Store {
             let q = query.trim().to_lowercase();
             let pattern = format!("%{q}%");
             for store in stores {
-                let matches = Box::pin(store.search_sessions(
+                let matches = Box::pin(store.search_sessions_with_options(
                     project_id,
                     query,
                     limit,
                     session_id,
                     preferred_project_id,
+                    excluded_project_ids,
+                    options,
                 ))
                 .await?;
                 for row in matches {
@@ -3371,11 +3683,22 @@ impl Store {
         }
         let q = query.trim().to_lowercase();
         let pattern = format!("%{q}%");
+        // Older read-only project databases have no `shelved` column: nothing
+        // there is shelved, and the visibility filter is a constant for them.
+        let shelved_expr = if Self::has_column(&self.pool, "frames", "shelved").await? {
+            "COALESCE(f.shelved, 0)"
+        } else {
+            "0"
+        };
+        // A reference lookup by id ignores shelving, as does a keyword search
+        // that opts in; the empty-query recent list never lists shelved rows.
+        let shelved_filter =
+            (session_id.is_none() && !(options.include_shelved && !q.is_empty())).then_some(false);
         let sql = format!(
             "WITH searchable_sessions AS ( \
                 SELECT f.rowid AS frame_rowid, f.id AS id, f.project_id AS project_id, \
                     COALESCE(p.name,'') AS project_name, f.created_at AS created_at, \
-                    COALESCE(f.title,'') AS custom_title, \
+                    COALESCE(f.title,'') AS custom_title, {shelved_expr} AS shelved, \
                     (SELECT content FROM messages m WHERE m.frame_id=f.id AND m.role='user' ORDER BY m.seq ASC LIMIT 1) AS first_user, \
                     (SELECT role FROM messages m WHERE m.frame_id=f.id ORDER BY m.seq DESC LIMIT 1) AS last_role, \
                     (SELECT COALESCE(MAX(ts), f.updated_at) FROM messages m WHERE m.frame_id=f.id) AS activity_at, \
@@ -3384,6 +3707,7 @@ impl Store {
                 WHERE f.parent_frame_id=f.id \
                   AND f.exploration_id IS NULL \
                   AND f.project_id NOT LIKE 'assistant:%' \
+                  AND f.project_id NOT IN (SELECT value FROM json_each(?)) \
                   AND {listable} \
                   AND (? IS NULL OR f.project_id=?) \
                   AND (? IS NULL OR f.id=?) \
@@ -3396,9 +3720,10 @@ impl Store {
                 CASE WHEN ?='' OR lower(COALESCE(NULLIF(s.custom_title,''), s.first_user, '')) LIKE ? THEN 0 ELSE 1 END, \
                 s.activity_at DESC, s.frame_rowid DESC LIMIT ?",
             listable = format!("({}) AND ({})", self.session_listable_sql().await?,
-                self.session_shelved_sql(session_id.is_none().then_some(false)).await?),
+                self.session_shelved_sql(shelved_filter).await?),
         );
         let rows = sqlx::query(&sql)
+            .bind(serde_json::to_string(excluded_project_ids)?)
             .bind(project_id)
             .bind(project_id)
             .bind(session_id)
@@ -3427,6 +3752,7 @@ impl Store {
                     activity_at: row.try_get("activity_at")?,
                     last_role: row.try_get("last_role")?,
                     unseen: row.try_get("unseen")?,
+                    shelved: row.try_get::<i64, _>("shelved")? != 0,
                 })
             })
             .collect()

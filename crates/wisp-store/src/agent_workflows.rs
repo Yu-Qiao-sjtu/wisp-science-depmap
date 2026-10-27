@@ -10,6 +10,7 @@ pub struct AgentDelegationRootLimits {
     pub max_depth: u8,
     pub max_tasks: u32,
     pub max_parallel: u32,
+    /// Zero means unlimited for each resource dimension, matching task budgets.
     pub max_tokens: u64,
     pub max_tool_calls: u64,
     pub max_cost_microunits: u64,
@@ -43,12 +44,8 @@ impl AgentDelegationRootLimits {
         if self.max_parallel == 0 || self.max_parallel > 2 {
             anyhow::bail!("root Agent max_parallel must be between 1 and 2");
         }
-        if self.max_tokens == 0
-            || self.max_tool_calls == 0
-            || self.max_cost_microunits == 0
-            || self.wall_time_secs == Some(0)
-        {
-            anyhow::bail!("root Agent budgets must be positive");
+        if self.wall_time_secs == Some(0) {
+            anyhow::bail!("root Agent wall timeout must be positive or unset");
         }
         Ok(())
     }
@@ -87,9 +84,11 @@ impl BudgetReservation {
     }
 
     fn exceeds(self, limits: &AgentDelegationRootLimits) -> bool {
-        self.max_tokens.unwrap_or_default() > limits.max_tokens
-            || self.max_tool_calls.unwrap_or_default() > limits.max_tool_calls
-            || self.max_cost_microunits.unwrap_or_default() > limits.max_cost_microunits
+        (limits.max_tokens > 0 && self.max_tokens.unwrap_or_default() > limits.max_tokens)
+            || (limits.max_tool_calls > 0
+                && self.max_tool_calls.unwrap_or_default() > limits.max_tool_calls)
+            || (limits.max_cost_microunits > 0
+                && self.max_cost_microunits.unwrap_or_default() > limits.max_cost_microunits)
     }
 }
 
@@ -157,6 +156,14 @@ pub struct AgentWorkflow {
     pub depth: i64,
     #[serde(default = "default_root_limits_json")]
     pub root_limits_json: String,
+    /// Zero-based execution round. Retrying a root starts a fresh round while
+    /// keeping every earlier attempt and its usage available for audit.
+    #[serde(default)]
+    pub execution_generation: i64,
+    #[serde(default)]
+    pub execution_started_at: Option<i64>,
+    #[serde(default)]
+    pub stop_reason: Option<String>,
     pub name: String,
     pub description: String,
     #[serde(default)]
@@ -198,6 +205,9 @@ impl AgentWorkflow {
             parent_attempt_id: None,
             depth: 0,
             root_limits_json: default_root_limits_json(),
+            execution_generation: 0,
+            execution_started_at: None,
+            stop_reason: None,
             goal: name.clone(),
             name,
             description: String::new(),
@@ -409,6 +419,9 @@ fn workflow_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<AgentWorkflow> {
         parent_attempt_id: row.try_get("parent_attempt_id")?,
         depth: row.try_get("depth")?,
         root_limits_json: row.try_get("root_limits_json")?,
+        execution_generation: row.try_get("execution_generation")?,
+        execution_started_at: row.try_get("execution_started_at")?,
+        stop_reason: row.try_get("stop_reason")?,
         name: row.try_get("name")?,
         description: row.try_get("description")?,
         goal: row.try_get("goal")?,
@@ -475,13 +488,38 @@ fn plan_budget(steps: &[AgentWorkflowStep]) -> Result<BudgetReservation> {
         })
 }
 
+async fn ensure_root_retry_is_idle(
+    tx: &mut Transaction<'_, Sqlite>,
+    workflow_id: &str,
+) -> Result<()> {
+    let depth: Option<i64> = sqlx::query_scalar("SELECT depth FROM agent_workflows WHERE id=?")
+        .bind(workflow_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+    if depth.is_some_and(|depth| depth != 0) {
+        anyhow::bail!("Retry nested Agent workflows through their root workflow");
+    }
+    let active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM agent_workflow_attempts WHERE root_workflow_id=? \
+         AND status IN ('queued','running','waiting_run')",
+    )
+    .bind(workflow_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if active != 0 {
+        anyhow::bail!("Wait for the previous Agent workflow execution to stop before retrying");
+    }
+    Ok(())
+}
+
 async fn existing_root_budget(
     tx: &mut Transaction<'_, Sqlite>,
     root_workflow_id: &str,
 ) -> Result<BudgetReservation> {
     let rows = sqlx::query(
         "SELECT s.budget_json FROM agent_workflow_steps s \
-         JOIN agent_workflows w ON w.id=s.workflow_id WHERE w.root_workflow_id=?",
+         JOIN agent_workflows w ON w.id=s.workflow_id WHERE w.root_workflow_id=? \
+         AND w.execution_generation=(SELECT execution_generation FROM agent_workflows WHERE id=w.root_workflow_id)",
     )
     .bind(root_workflow_id)
     .fetch_all(&mut **tx)
@@ -504,8 +542,9 @@ async fn validate_nested_workflow_registration(
         .ok_or_else(|| anyhow::anyhow!("nested Agent workflow requires a parent attempt"))?;
     let parent = sqlx::query(
         "SELECT a.root_workflow_id,a.depth,a.status,a.allow_delegation,a.cancel_requested,\
-         a.child_frame_id,r.project_id,r.workspace_id,r.status AS root_status,r.created_at,\
-         r.root_limits_json FROM agent_workflow_attempts a \
+         a.child_frame_id,a.execution_generation,r.execution_generation AS root_generation,\
+         r.project_id,r.workspace_id,r.status AS root_status,r.execution_started_at,\
+         r.stop_reason,r.root_limits_json FROM agent_workflow_attempts a \
          JOIN agent_workflows r ON r.id=a.root_workflow_id WHERE a.id=?",
     )
     .bind(parent_attempt_id)
@@ -528,6 +567,11 @@ async fn validate_nested_workflow_registration(
         || parent.try_get::<i64, _>("allow_delegation")? == 0
         || parent.try_get::<i64, _>("cancel_requested")? != 0
         || parent.try_get::<String, _>("root_status")? != "running"
+        || parent
+            .try_get::<Option<String>, _>("stop_reason")?
+            .is_some()
+        || parent.try_get::<i64, _>("execution_generation")?
+            != parent.try_get::<i64, _>("root_generation")?
     {
         anyhow::bail!("parent Agent attempt is not authorized to delegate");
     }
@@ -547,14 +591,16 @@ async fn validate_nested_workflow_registration(
         anyhow::bail!("root Agent workflow depth limit prevents nested delegation");
     }
     let now = chrono::Utc::now().timestamp();
-    let root_created_at: i64 = parent.try_get("created_at")?;
-    if limits.wall_time_secs.is_some_and(|seconds| {
-        now >= root_created_at.saturating_add(i64::try_from(seconds).unwrap_or(i64::MAX))
-    }) {
+    if super::agent_workflow_attempts::root_deadline_exceeded(
+        parent.try_get("execution_started_at")?,
+        limits.wall_time_secs,
+        now,
+    ) {
         anyhow::bail!("root Agent workflow wall-clock limit is exhausted");
     }
     let cancel_requested: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM agent_workflow_attempts WHERE root_workflow_id=? \
+         AND execution_generation=(SELECT execution_generation FROM agent_workflows WHERE id=agent_workflow_attempts.root_workflow_id) \
          AND cancel_requested=1",
     )
     .bind(&root_workflow_id)
@@ -565,7 +611,8 @@ async fn validate_nested_workflow_registration(
     }
     let existing_tasks: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM agent_workflow_steps s JOIN agent_workflows w \
-         ON w.id=s.workflow_id WHERE w.root_workflow_id=?",
+         ON w.id=s.workflow_id WHERE w.root_workflow_id=? \
+         AND w.execution_generation=(SELECT execution_generation FROM agent_workflows WHERE id=w.root_workflow_id)",
     )
     .bind(&root_workflow_id)
     .fetch_one(&mut **tx)
@@ -615,7 +662,7 @@ async fn insert_step(tx: &mut Transaction<'_, Sqlite>, step: &AgentWorkflowStep)
     Ok(())
 }
 
-const SELECT_WORKFLOW: &str = "SELECT id,project_id,workspace_id,frame_id,root_workflow_id,parent_attempt_id,depth,root_limits_json,name,description,goal,mode,status,max_parallel,requires_confirmation,plan_json,version,enabled,approved_at,created_at,updated_at FROM agent_workflows";
+const SELECT_WORKFLOW: &str = "SELECT id,project_id,workspace_id,frame_id,root_workflow_id,parent_attempt_id,depth,root_limits_json,execution_generation,execution_started_at,stop_reason,name,description,goal,mode,status,max_parallel,requires_confirmation,plan_json,version,enabled,approved_at,created_at,updated_at FROM agent_workflows";
 
 impl super::Store {
     pub async fn create_agent_workflow_plan(
@@ -643,8 +690,18 @@ impl super::Store {
         } else {
             validate_nested_workflow_registration(&mut tx, workflow, steps).await?;
         }
+        let generation = if workflow.depth == 0 {
+            0
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT execution_generation FROM agent_workflows WHERE id=?",
+            )
+            .bind(&workflow.root_workflow_id)
+            .fetch_one(&mut *tx)
+            .await?
+        };
         sqlx::query(
-            "INSERT INTO agent_workflows(id,project_id,workspace_id,frame_id,root_workflow_id,parent_attempt_id,depth,root_limits_json,name,description,goal,mode,status,max_parallel,requires_confirmation,plan_json,version,enabled,approved_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO agent_workflows(id,project_id,workspace_id,frame_id,root_workflow_id,parent_attempt_id,depth,root_limits_json,execution_generation,name,description,goal,mode,status,max_parallel,requires_confirmation,plan_json,version,enabled,approved_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&workflow.id)
         .bind(&workflow.project_id)
@@ -654,6 +711,7 @@ impl super::Store {
         .bind(workflow.parent_attempt_id.as_deref())
         .bind(workflow.depth)
         .bind(&workflow.root_limits_json)
+        .bind(generation)
         .bind(&workflow.name)
         .bind(&workflow.description)
         .bind(&workflow.goal)
@@ -711,6 +769,7 @@ impl super::Store {
 
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.begin_write().await?;
+        ensure_root_retry_is_idle(&mut tx, &workflow.id).await?;
         let existing_ids = sqlx::query_scalar::<_, String>(
             "SELECT id FROM agent_workflow_steps WHERE workflow_id=? ORDER BY id",
         )
@@ -771,13 +830,14 @@ impl super::Store {
             }
         }
         let approved = sqlx::query(
-            "UPDATE agent_workflows SET goal=?,mode=?,status='approved',max_parallel=?,requires_confirmation=?,plan_json=?,version=version+1,approved_at=?,updated_at=? WHERE id=? AND version=? AND status='draft'",
+            "UPDATE agent_workflows SET goal=?,mode=?,status='approved',max_parallel=?,requires_confirmation=?,plan_json=?,root_limits_json=?,version=version+1,approved_at=?,updated_at=?,execution_generation=execution_generation+1,execution_started_at=NULL,stop_reason=NULL WHERE id=? AND version=? AND status='draft'",
         )
         .bind(&workflow.goal)
         .bind(&workflow.mode)
         .bind(workflow.max_parallel)
         .bind(workflow.requires_confirmation as i64)
         .bind(&workflow.plan_json)
+        .bind(&workflow.root_limits_json)
         .bind(now)
         .bind(now)
         .bind(&workflow.id)
@@ -855,27 +915,33 @@ impl super::Store {
         }
         let now = chrono::Utc::now().timestamp();
         let mut tx = self.begin_write().await?;
+        if to == AgentWorkflowStatus::Approved {
+            ensure_root_retry_is_idle(&mut tx, id).await?;
+        }
         let updated = sqlx::query(
-            "UPDATE agent_workflows SET status=?,version=version+1,approved_at=CASE WHEN ?='approved' THEN ? ELSE approved_at END,updated_at=? WHERE id=? AND status=?",
+            "UPDATE agent_workflows SET status=?,version=version+1,\
+             approved_at=CASE WHEN ?='approved' THEN ? ELSE approved_at END,updated_at=?,\
+             execution_generation=execution_generation+CASE WHEN ?='approved' THEN 1 ELSE 0 END,\
+             execution_started_at=CASE WHEN ?='approved' THEN NULL WHEN ?='running' THEN ? ELSE execution_started_at END,\
+             stop_reason=CASE WHEN ?='approved' THEN NULL ELSE stop_reason END \
+             WHERE id=? AND status=?",
         )
         .bind(to.as_str())
         .bind(to.as_str())
         .bind(now)
         .bind(now)
+        .bind(to.as_str())
+        .bind(to.as_str())
+        .bind(to.as_str())
+        .bind(now)
+        .bind(to.as_str())
         .bind(id)
         .bind(from.as_str())
         .execute(&mut *tx)
         .await?;
         let changed = updated.rows_affected() == 1;
-        if changed && to == AgentWorkflowStatus::Approved {
-            sqlx::query(
-                "UPDATE agent_workflow_attempts SET cancel_requested=0,updated_at=? WHERE workflow_id=? AND cancel_requested=1",
-            )
-            .bind(now)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        }
+        // Earlier attempts, including their cancellation flags, remain intact.
+        // Every live admission/cancellation check is scoped to the new round.
         tx.commit().await?;
         Ok(changed)
     }

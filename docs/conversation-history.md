@@ -1,5 +1,18 @@
 # Browsing conversation history
 
+Project cards show separate **Needs you** and **Running** counts. **Needs you**
+(**待处理** in Chinese) includes unread assistant replies and requests waiting for
+your confirmation; it does not mean every listed conversation is still running.
+
+The sidebar marks these conversations with an icon and a visible status label.
+Choose **Needs you** above the conversation list to see all pending conversations
+in the current project, including older history and sessions in collapsed groups
+or branches. **All sessions** restores the normal grouping and sort order. The
+topbar inbox uses the same complete list and also offers other projects. Opening
+an unread reply clears its marker after the conversation loads; an outstanding
+approval remains pending until you respond. Navigation, completed turns and
+approval changes refresh the list, with periodic refreshes for other windows.
+
 After a turn finishes, its commentary, reasoning, tool calls, and execution-plan
 updates collapse into one **Processed** disclosure before the final report.
 Per-round usage and context-compaction records between phases stay inside that
@@ -16,6 +29,17 @@ Existing restrictions for ACP sessions, exploration sessions, and branches
 still apply. **Review**, **Rewind**, **Undo**, and **Start exploration** remain
 unavailable during a running turn; the unfinished turn cannot become a memory
 or branch checkpoint yet.
+
+A branch can also be **opened by the agent**: when a conversation's Agent calls
+`open_branch` during a turn, the branch is created as that turn ends, at the
+same `after_response` checkpoint **Branch** on that reply would use. It is an
+ordinary branch, nested under the conversation in the sidebar, and the
+conversation gets a reply saying the branch was opened and quoting the agent's
+brief. Opening the branch shows the brief in its composer as an unsent draft;
+edit or send it to continue there. Nothing in the branch reaches the original
+conversation unless you **Merge back**. See
+[Agent-opened branches](agent-delegation.md#agent-opened-branches) for how
+this differs from a subagent conversation.
 
 When a completed Run is already attached to its matching submission step,
 `monitor_run` / `wisp_monitor_run` records and their progress messages join the
@@ -124,11 +148,131 @@ event. Cumulative input/output billing totals remain unchanged.
 Retained-tail markers follow copied messages through earlier epochs; when a
 legacy or ambiguous copy has no reliable origin, the marker remains unknown.
 
+### Session health
+
+Because the percentage drops back after every compaction, the usage panel also
+shows a health line under the epoch line, for example `Health: split soon ·
+compacted 3× · last freed 20%`. It counts only compactions on the current
+epoch chain (undone epochs are excluded) and measures each compaction's freed
+ratio as `(before − after) / before`:
+
+- **OK**: fewer than two compactions, or compaction still frees plenty of
+  room. Many compactions alone never change the level, so sessions that
+  monitor long runs stay OK as long as each fold frees space.
+- **Split soon**: after two or more compactions, the latest freed less than
+  25% of its window, or less than half of what the previous one freed while
+  also staying under 50%.
+- **Split now**: the last two compactions both freed less than 15%; the
+  window is above 90% again after a compaction; or a split-soon session's
+  conversation already fills half the window.
+
+Whenever the level is not OK, the panel shows the same status row as a nearly
+full window, with **Compact**, **New session**, and **Handoff summary**. It is
+passive: no modal and no throttling, so it stays visible until the level
+recovers.
+
+### Handoff summary
+
+**Handoff summary** turns the model's current context (the compaction
+checkpoint plus the retained turns, rendered the same way semantic compaction
+feeds its summary model) into a note for a fresh session, written by the
+conversation's model. The note uses four headings: goal and current stage,
+completed work and confirmed decisions (with the files they touched), pending
+work and next steps, and state to keep outside the conversation (facts that
+belong in a project status file or memo rather than in chat).
+
+The note opens in an editable dialog over the usage panel. An optional
+instruction steers emphasis; **Regenerate** asks again with it. **Start new
+session** closes the dialog and opens a new conversation whose first message is
+the note as edited. Nothing is changed in the original conversation, which
+stays in the sidebar. Escape closes the dialog (also while the note is still
+being generated) and leaves the usage panel open; a second Escape closes the
+panel. The button is unavailable while a turn is running and in ACP
+conversations.
+
+### Quote or reuse a range of turns
+
+**Quote / reuse** on a user turn starts a range. **End quote here** on the same
+or another completed user turn opens a review dialog; clicking an earlier turn
+swaps the endpoints. The source label keeps the conversation title and inclusive
+turn range, including turns before a compaction.
+
+**Original turns** previews plain `User:` / `Assistant:` text without tool calls,
+tool output, images, reasoning or compaction checkpoints. Choose **New conversation**
+or an existing conversation in the current project, then **Add to conversation**.
+Search by title or load more conversations to reach older destinations. Merged or
+orphaned branches, delegated sessions and exploration sessions are excluded as
+destinations. Completed turns in branches and explorations can still be sources;
+ACP conversations cannot be sources.
+
+The quote is staged in the destination's composer. Its unsent text and existing
+quotes are preserved, and nothing is sent until you add your request and send.
+Both conversations keep their history. Unsent text and quotes remain attached
+to their own sessions when you switch; these drafts are held in memory and do
+not survive an app restart. Very long excerpts are shortened with a visible notice.
+
+### Distill a reusable experience
+
+In the same review dialog, choose **Distill experience**, optionally describe the
+operation that worked well, and click **Generate experience**. Wisp uses the
+source conversation's configured model to draft a reusable procedure from exactly
+the selected turns. Unlike a plain quote, its evidence includes tool inputs and
+results so that concrete operations and verification can be learned. System
+prompts, reasoning and compaction checkpoints are excluded. Long evidence is
+bounded and the dialog reports when it was shortened.
+
+The draft covers applicability, prerequisites, steps, verification, and limits or
+adaptations for another task. It must distinguish observed success from unverified
+suggestions. You can edit or regenerate it, then choose a destination and attach
+it as an experience quote. Nothing continues the original task or executes its
+tools during generation.
+
+**Save as memory** also stores the edited draft, source conversation ID and turn
+range through the existing memory system. Choose project memory to reuse within
+the project, or global memory for other projects; memory must be enabled for
+saving and injection. Existing memory size limits and exploration write guards
+still apply. Saving leaves the draft available for quoting into a conversation.
+Generated drafts are not saved automatically.
+
+Escape closes the review dialog first and leaves the range selected; another
+Escape cancels the range. Closing while a read or generation is pending discards
+its late result. Switching conversations also clears the selection. A failed
+model request or new-conversation creation leaves the selection and draft available
+for retry. Historical completed turns remain usable while a later turn is running.
+
 ## Manual smoke checks
+
+- Select turns in either direction, press Escape immediately after the review
+  dialog opens, and verify only the dialog closes; press Escape again to clear
+  the range. Repeat while experience generation is pending.
+- Prepare unsent text and a quote in another conversation, attach a selected
+  range to it, and verify both remain. Switch back and check the source draft.
+  Nothing should be sent until you press Send.
+- Generate an experience from a successful operation spanning several turns,
+  edit it, save it as project/global memory, and attach it to an existing chat.
+  Check the saved text and source range, then ask the destination to adapt it.
+- Repeat with a compacted range, a long range, and an earlier completed range
+  during a running turn. Check omission notices and reject the live final turn.
+
+- In a project with unread replies and a running conversation, verify that the
+  home card shows separate labeled counts. Open the project and use **Needs you**
+  to find an older unread reply, including one in a collapsed group or branch.
+  Open it and check that its pending count decreases while unanswered approvals
+  remain listed. Return to **All sessions** and check that grouping is preserved.
+- Check the labels at a narrow sidebar width and increased UI font size in both
+  Chinese and English; status text must remain visible when titles are truncated.
 
 - Compact twice, undo the latest compact, and verify the parent epoch, its
   summary, and its undo action return without reopening the conversation.
 - Undo and compact again; verify the new card is not marked as already undone.
+- Compact twice where the second compact frees little room; verify the usage
+  panel shows `Health: split soon` and the Compact / New session row at a low
+  percentage, and that undoing the latest compact returns the line to OK.
+- From that row, click **Handoff summary**: the note should name the current
+  goal, finished items with their paths, the next item to resume, and state to
+  write down. Edit it, click **Start new session**, and verify the new
+  conversation's first user message is the edited note while the original
+  conversation remains unchanged.
 - Trigger automatic compaction, let the turn finish, and expand its summary in
   the same window. Switch conversations during refresh and verify neither
   conversation receives the other's metadata or loses pending/live messages.
@@ -174,6 +318,13 @@ or research graph relationships remain in the source project. A content-addresse
 snapshot used by another artifact also remains there. Protected records survive
 on an invisible deleted-session ownership frame so their existing references work.
 There is no recursive deletion of output directories or remote/GPU/SSH data.
+
+When a conversation is deleted together with its subagents and branches, the
+preview covers each of them, and references between conversations deleted
+together keep nothing. Each one's preview is rechecked before any is deleted
+(see [Agent delegation](agent-delegation.md)). Selecting a conversation with
+all of its subagents and branches, such as with **Select all**, deletes them the
+same way.
 
 Moving eligible artifacts transfers their complete recorded version histories,
 internal version dependencies, environment snapshots, and structured message

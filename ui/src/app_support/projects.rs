@@ -4,9 +4,6 @@ use super::*;
 pub(crate) fn ProjectsScreen(
     locale: RwSignal<Locale>,
     calendar_open: RwSignal<bool>,
-    automation_open: RwSignal<bool>,
-    automation_form: RwSignal<bool>,
-    on_open_specialists: Callback<()>,
     dialog_open: RwSignal<bool>,
     running: RwSignal<HashSet<String>>,
     approval_pending: ReadSignal<HashSet<String>>,
@@ -65,6 +62,9 @@ pub(crate) fn ProjectsScreen(
     // did nothing — use an in-app modal instead.
     let pending_delete = create_rw_signal(None::<String>);
     let confirm_delete_data = create_rw_signal(false);
+    // Project Skills under `.wisp/skills` that deleting the folder would take
+    // with it; listed so the user can promote them to global first.
+    let delete_data_skills = create_rw_signal(Vec::<String>::new());
     let settings_project_id = create_rw_signal(None::<String>);
     let settings_form = create_rw_signal(ProjectSettings::default());
     let settings_baseline = create_rw_signal(ProjectSettings::default());
@@ -318,8 +318,12 @@ pub(crate) fn ProjectsScreen(
             }))
             .unwrap();
             match invoke_checked("create_project", arg).await {
-                Ok(value) => {
-                    if let Ok(project) = serde_wasm_bindgen::from_value::<ProjectSummary>(value) {
+                // The project row is already written when this resolves, so a
+                // response the UI cannot read must still close the form and
+                // say why — leaving it open invites a retry that can only
+                // fail with "already registered".
+                Ok(value) => match serde_wasm_bindgen::from_value::<ProjectSummary>(value) {
+                    Ok(project) => {
                         new_name.set(String::new());
                         new_dir.set(String::new());
                         new_desc.set(String::new());
@@ -328,7 +332,11 @@ pub(crate) fn ProjectsScreen(
                         creating.set(false);
                         on_open.call(project.id);
                     }
-                }
+                    Err(error) => {
+                        creating.set(false);
+                        open_error.set(Some(error.to_string()));
+                    }
+                },
                 Err(error) => {
                     creating.set(false);
                     open_error.set(Some(localize_backend(
@@ -683,7 +691,7 @@ pub(crate) fn ProjectsScreen(
             }
             ev.prevent_default();
         }>
-            <div class="projects-head" prop:inert=move ||calendar_open.get()||automation_open.get()>
+            <div class="projects-head" prop:inert=move ||calendar_open.get()>
                 <div class="projects-brand">
                     <h1 class="projects-title">
                         <span class="projects-brand-mark brand-wordmark" role="img" aria-label="wisp-depmap"></span>
@@ -699,10 +707,6 @@ pub(crate) fn ProjectsScreen(
                             title=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
                             aria-label=move || crate::research_journey::j(locale.get(), "Research calendar", "研究日历")
                             on:click=move |_| calendar_open.set(true)>{compose_icon("calendar")}</button>
-                        <button type="button" class="projects-icon-btn" data-testid="open-automation"
-                            title=move || crate::research_journey::j(locale.get(), "Automation", "自动化")
-                            aria-label=move || crate::research_journey::j(locale.get(), "Automation", "自动化")
-                            on:click=move |_| automation_open.set(true)>{compose_icon("clock")}</button>
                         <button type="button" class="projects-icon-btn"
                             title=move || t(locale.get(), "sidebar.library")
                             aria-label=move || t(locale.get(), "sidebar.library")
@@ -1214,15 +1218,6 @@ pub(crate) fn ProjectsScreen(
                     </div>
                 </div>
             })}
-            {move || automation_open.get().then(|| view! {<div class="home-calendar-page">
-            <crate::automation::AutomationPage
-                locale=locale
-                projects=Signal::derive(move || projects.get().into_iter().filter(|p| !project_is_hidden(&p.id)).collect())
-                form_open=automation_form
-                on_open_specialists=on_open_specialists
-                on_close=Callback::new(move |_| { automation_form.set(false); automation_open.set(false); })
-            />
-            </div>})}
             {move || calendar_open.get().then(|| view! {<div class="home-calendar-page">
             <crate::research_calendar::ResearchCalendar
                 locale=locale
@@ -1232,7 +1227,7 @@ pub(crate) fn ProjectsScreen(
                 project_transfer=project_transfer.read_only()
             />
             </div>})}
-            <div class="projects-cols" prop:inert=move ||calendar_open.get()||automation_open.get()>
+            <div class="projects-cols" prop:inert=move ||calendar_open.get()>
                 <div class="projects-col">
                     <h2>{move || t(locale.get(), "projects.title")}</h2>
                     {move || {
@@ -1266,8 +1261,6 @@ pub(crate) fn ProjectsScreen(
                             let id_code = p.id.clone();
                             let meta = tf(loc, "projects.sessions_n", &[("n", &p.session_count.to_string())]);
                             let artifacts_meta = tf(loc, "projects.artifacts_n", &[("n", &p.artifact_count.to_string())]);
-                            let active = p.running_count + p.needs_you_count;
-                            let dot_class = if p.running_count > 0 { "running" } else { "ready" };
                             let when = format_relative_time(p.updated_at, loc);
                             let sync_when = p.last_synced_at
                                 .map(|timestamp| format_relative_time(timestamp, loc))
@@ -1306,18 +1299,22 @@ pub(crate) fn ProjectsScreen(
                                                         {t(locale.get(), "projects.transfer.export_locked_badge")}
                                                     </span>
                                                 })}
-                                            {(active > 0).then(|| view! {
-                                                <span class=format!("pc-dot {dot_class}")>
-                                                    <span class="pc-dot-mark"></span>
-                                                    <span class="pc-dot-n">{active}</span>
-                                                </span>
-                                            })}
                                             {(!when.is_empty()).then(|| view! { <span class="pc-when">{when.clone()}</span> })}
                                         </div>
                                         {(!workspace_path.trim().is_empty()).then(|| view! {
                                             <div class="pc-path" title=workspace_path.clone()>{workspace_path.clone()}</div>
                                         })}
                                         <div class="pc-meta-row">
+                                            {(p.needs_you_count > 0).then(|| view! {
+                                                <span class="sess-status sess-status-needs-you" title=t(loc, "sess_status.needs_you_hint")>
+                                                    {tf(loc, "sess_status.needs_you_n", &[("n", &p.needs_you_count.to_string())])}
+                                                </span>
+                                            })}
+                                            {(p.running_count > 0).then(|| view! {
+                                                <span class="sess-status sess-status-running">
+                                                    {tf(loc, "sess_status.running_n", &[("n", &p.running_count.to_string())])}
+                                                </span>
+                                            })}
                                             <span class="pc-meta">{meta}</span>
                                             <span class="pc-meta">{artifacts_meta}</span>
                                             {sync_label.clone().map(|label| view! { <span class="pc-sync-state" data-folder-sync=p.folder_sync.clone()>{label}</span> })}
@@ -1520,7 +1517,7 @@ pub(crate) fn ProjectsScreen(
                     }).collect_view()}
                 </div>
             </div>
-            <div class="projects-footer" prop:inert=move ||calendar_open.get()||automation_open.get()>
+            <div class="projects-footer" prop:inert=move ||calendar_open.get()>
                 <span>{move || t(locale.get(), "projects.star_hint")}</span>
                 <button type="button" class="projects-star-link"
                     on:click=move |_| open_external_url("https://github.com/Yu-Qiao-sjtu/wisp-science-depmap".into())>
@@ -1578,6 +1575,18 @@ pub(crate) fn ProjectsScreen(
                                     "projects.delete_data_path",
                                     &[("path", &workspace_dir)],
                                 )}</code>
+                                {move || {
+                                    let names = delete_data_skills.get();
+                                    (!names.is_empty()).then(|| {
+                                        let count = names.len().to_string();
+                                        view! {
+                                            <div class="hint project-delete-skills" role="note" data-testid="project-delete-skills">
+                                                <p>{move || tf(locale.get(), "projects.delete_data_skills", &[("count", &count)])}</p>
+                                                <ul>{names.into_iter().map(|name| view! { <li>{name}</li> }).collect_view()}</ul>
+                                            </div>
+                                        }
+                                    })
+                                }}
                                 <div class="row">
                                     <button type="button" on:click=move |_| {
                                         confirm_delete_data.set(false);
@@ -1612,6 +1621,7 @@ pub(crate) fn ProjectsScreen(
                 } else {
                     let confirm_del = delete_confirmed;
                     let remove_id = id.clone();
+                    let skills_id = id.clone();
                     view! {
                         <div class="overlay">
                             <div class="modal confirm-modal project-delete-choice-modal"
@@ -1629,7 +1639,18 @@ pub(crate) fn ProjectsScreen(
                                     <button type="button" class="delete-with-data" on:click=move |_| {
                                         delete_data_unlock_at.set(js_sys::Date::now() + 5_000.0);
                                         delete_data_countdown.set(5);
+                                        delete_data_skills.set(Vec::new());
                                         confirm_delete_data.set(true);
+                                        let id = skills_id.clone();
+                                        spawn_local(async move {
+                                            let arg = to_value(&serde_json::json!({ "id": id })).unwrap();
+                                            let Ok(value) = invoke_checked("list_project_skill_packages", arg).await else { return };
+                                            let Ok(names) = serde_wasm_bindgen::from_value::<Vec<String>>(value) else { return };
+                                            // Ignore a late answer for a dialog the user has since left.
+                                            if confirm_delete_data.get_untracked() && pending_delete.get_untracked().as_deref() == Some(id.as_str()) {
+                                                delete_data_skills.set(names);
+                                            }
+                                        });
                                     }>{move || t(locale.get(), "projects.remove_with_data")}</button>
                                 </div>
                             </div>

@@ -391,10 +391,17 @@ mod tests {
             record_mcp_observation("c", "p", "f", "obs", "depmap_gene_evidence", " ", "13", 4)
                 .is_err()
         );
-        assert!(
-            record_mcp_observation("c", " ", "f", "obs", "depmap_gene_evidence", "ev-9", "13", 4)
-                .is_err()
-        );
+        assert!(record_mcp_observation(
+            "c",
+            " ",
+            "f",
+            "obs",
+            "depmap_gene_evidence",
+            "ev-9",
+            "13",
+            4
+        )
+        .is_err());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ "$(uname -s)" != Darwin ]]; then
-  echo 'The SwiftUI preview must be built on macOS.' >&2
+  echo 'The SwiftUI app must be built on macOS.' >&2
   exit 1
 fi
 
@@ -25,7 +25,7 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 BUILD="$ROOT/target/native-macos"
-APP_NAME='Wisp Science Preview'
+APP_NAME='Wisp Science SwiftUI'
 if [[ "$QA_MODE" == 1 ]]; then
   BUILD="$ROOT/target/native-macos-qa"
   APP_NAME='Wisp Science QA'
@@ -50,22 +50,31 @@ fi
 
 python3 "$ROOT/scripts/sync_native_design.py" --check
 cargo build "${RUST_ARGS[@]}" -p wisp-service
-# A small inert document hosts legacy command extractors. No WebView settings
-# UI is bundled in this helper; all visible settings controls are native.
+# Both apps share a singleton. Keep the inert document for native command
+# extraction, but bundle the real frontend so a later regular-app launch can
+# promote this host without losing active conversations (#1520).
 HOST_ASSETS="$BUILD/host-assets"
-mkdir -p "$HOST_ASSETS"
-cp "$ROOT/ui/native-host.html" "$HOST_ASSETS/native-host.html"
-cp "$ROOT/ui/native-host.html" "$HOST_ASSETS/index.html"
+node "$ROOT/ui/sync-vendor.mjs"
+(
+  cd "$ROOT/ui"
+  env -u NO_COLOR -u TRUNK_NO_COLOR trunk build --release --cargo-profile release-wasm --dist "$HOST_ASSETS"
+)
 TAURI_CONFIG="$(python3 -c 'import json,sys; print(json.dumps({"identifier":sys.argv[2],"build":{"frontendDist":sys.argv[1]}}))' "$HOST_ASSETS" "$HOST_IDENTIFIER")" \
   cargo build "${RUST_ARGS[@]}" -p wisp-tauri --features custom-protocol
 swift build "${SWIFT_ARGS[@]}" --disable-sandbox
 SWIFT_BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-install -m 755 "$SWIFT_BIN/WispSciencePreview" "$APP/Contents/MacOS/WispSciencePreview"
+install -m 755 "$SWIFT_BIN/WispScience" "$APP/Contents/MacOS/WispScience"
 install -m 755 "$RUST_BIN/wisp-service" "$APP/Contents/MacOS/wisp-service"
 cp "$ROOT/src-tauri/icons/icon.icns" "$APP/Contents/Resources/AppIcon.icns"
-cp -R "$SWIFT_BIN/WispSciencePreview_WispProjectBrowserUI.bundle" "$APP/Contents/Resources/"
+cp -R "$SWIFT_BIN/WispScience_WispProjectBrowserUI.bundle" "$APP/Contents/Resources/"
+# The document sandbox serves the same offline vendor modules as WebView/WinUI.
+PREVIEW_BUNDLE="$APP/Contents/Resources/WispScience_WispProjectBrowserUI.bundle"
+PREVIEW_RESOURCES="$PREVIEW_BUNDLE"
+if [[ -d "$PREVIEW_BUNDLE/Contents/Resources" ]]; then PREVIEW_RESOURCES="$PREVIEW_BUNDLE/Contents/Resources"; fi
+rm -rf "$PREVIEW_BUNDLE/vendor-runtime" "$PREVIEW_RESOURCES/vendor-runtime"
+cp -R "$ROOT/ui/vendor-src" "$PREVIEW_RESOURCES/vendor-runtime"
 cp -R "$SWIFT_BIN/SwiftTerm_SwiftTerm.bundle" "$APP/Contents/Resources/"
 cp -R "$SWIFT_BIN/SwiftMath_SwiftMath.bundle" "$APP/Contents/Resources/"
 # SwiftTerm 1.19 probes Contents/Resources itself. A resource symlink at the

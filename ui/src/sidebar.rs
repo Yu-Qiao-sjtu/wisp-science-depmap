@@ -1,66 +1,55 @@
 use crate::app_support::{
     allow_drop, bucket_sessions_by_date, compose_icon, drag_session_id, load_view_pref,
-    nest_branch_sessions, save_view_pref, start_session_drag, AvailableUpdate, FolderModal,
+    nest_branch_sessions, save_view_pref, start_conversation_drag, start_folder_drag,
+    AvailableUpdate, FolderModal,
 };
 use crate::bindings::is_mac;
 use crate::dto::*;
 use crate::i18n::{t, tf, Locale};
-use crate::text::dom_value;
 use crate::window_capture_escape;
 use leptos::*;
 use std::collections::{HashMap, HashSet};
 
-fn toggle_collapsed_key(set: &mut HashSet<String>, key: String) {
-    if !set.insert(key.clone()) {
-        set.remove(&key);
-    }
+/// Whether a parent's nested rows are in use: the parent or one of its children is the
+/// open conversation, or a child is running / waiting on the user.
+fn nest_in_use(
+    parent: &str,
+    kids: &[String],
+    active: Option<&str>,
+    running: &HashSet<String>,
+    attention: &HashSet<String>,
+) -> bool {
+    active.is_some_and(|id| id == parent || kids.iter().any(|kid| kid == id))
+        || kids
+            .iter()
+            .any(|kid| running.contains(kid) || attention.contains(kid))
 }
 
 #[cfg(test)]
-mod nest_toggle_tests {
-    use super::toggle_collapsed_key;
+mod nest_tests {
+    use super::nest_in_use;
     use std::collections::HashSet;
 
     #[test]
-    fn toggle_collapsed_key_inserts_then_removes() {
-        let mut set = HashSet::new();
-        toggle_collapsed_key(&mut set, "e:main".into());
-        assert!(set.contains("e:main"));
-        toggle_collapsed_key(&mut set, "e:main".into());
-        assert!(set.is_empty());
-        toggle_collapsed_key(&mut set, "b:main".into());
-        toggle_collapsed_key(&mut set, "e:main".into());
-        assert_eq!(set.len(), 2);
-    }
-}
-
-fn nest_group_toggle(
-    locale: Locale,
-    label_key: &'static str,
-    expand_key: &'static str,
-    collapse_key: &'static str,
-    count: usize,
-    collapsed: bool,
-    test_id: &'static str,
-    on_click: impl Fn(web_sys::MouseEvent) + 'static,
-) -> impl IntoView {
-    let action = t(locale, if collapsed { expand_key } else { collapse_key });
-    let count_label = count.to_string();
-    let aria = format!("{action} ({count})");
-    view! {
-        <button type="button" class="side-nest-toggle"
-            class:collapsed=collapsed
-            data-testid=test_id
-            aria-expanded=if collapsed { "false" } else { "true" }
-            title=action
-            aria-label=aria
-            on:click=on_click>
-            <span class="side-nest-caret" class:collapsed=collapsed aria-hidden="true">
-                {compose_icon("chevron-down")}
-            </span>
-            <span class="side-nest-label">{t(locale, label_key)}</span>
-            <span class="side-nest-count">{count_label}</span>
-        </button>
+    fn nest_opens_for_its_family_and_for_busy_children_only() {
+        let kids = vec!["kid".to_string()];
+        let none = HashSet::new();
+        let busy_kid: HashSet<String> = ["kid".to_string()].into();
+        let busy_parent: HashSet<String> = ["main".to_string()].into();
+        assert!(nest_in_use("main", &kids, Some("main"), &none, &none));
+        assert!(nest_in_use("main", &kids, Some("kid"), &none, &none));
+        assert!(!nest_in_use("main", &kids, Some("other"), &none, &none));
+        assert!(!nest_in_use("main", &kids, None, &none, &none));
+        assert!(nest_in_use("main", &kids, Some("other"), &busy_kid, &none));
+        assert!(nest_in_use("main", &kids, None, &none, &busy_kid));
+        // A busy parent already shows its own status; that alone does not unfold it.
+        assert!(!nest_in_use(
+            "main",
+            &kids,
+            Some("other"),
+            &busy_parent,
+            &busy_parent
+        ));
     }
 }
 
@@ -106,6 +95,9 @@ pub(super) struct SidebarState {
     pub(super) running: RwSignal<HashSet<String>>,
     /// Sessions blocked on a tool-approval / permission card (#327).
     pub(super) attention: RwSignal<HashSet<String>>,
+    /// All saved sessions needing attention, including replies outside the
+    /// sidebar's loaded history page. Shared with the topbar inbox.
+    pub(super) inbox_sessions: RwSignal<Vec<SessionSearchInfo>>,
     pub(super) rename_session_input: RwSignal<String>,
     pub(super) rename_session_target: RwSignal<Option<(String, String)>>,
     pub(super) collapsed_folders: RwSignal<HashSet<String>>,
@@ -131,6 +123,8 @@ pub(super) fn Sidebar(
     open_files: Callback<web_sys::MouseEvent>,
     open_research_graph: Callback<web_sys::MouseEvent>,
     research_journey_open: ReadSignal<bool>,
+    open_memos: Callback<web_sys::MouseEvent>,
+    memos_open: Signal<bool>,
     open_publication_workspace: Callback<web_sys::MouseEvent>,
     publication_open: ReadSignal<bool>,
     open_library: Callback<web_sys::MouseEvent>,
@@ -142,11 +136,11 @@ pub(super) fn Sidebar(
     load_older_sessions: Callback<()>,
     move_sessions_to: Callback<(Vec<String>, Option<String>)>,
     delete_sessions: Callback<Vec<String>>,
+    reorder_folders: Callback<Vec<String>>,
     open_session_actions: Callback<(
         web_sys::MouseEvent,
         String,
         String,
-        bool,
         bool,
         bool,
         bool,
@@ -177,6 +171,7 @@ pub(super) fn Sidebar(
         active_session,
         running,
         attention,
+        inbox_sessions,
         rename_session_input,
         rename_session_target,
         collapsed_folders,
@@ -205,11 +200,54 @@ pub(super) fn Sidebar(
         &["folder", "date", "none"],
     ));
     let sort_menu_open = create_rw_signal(false);
-    // Collapsed nested branch / exploration groups, keyed as "b:{parent}" / "e:{parent}".
-    let collapsed_nests = create_rw_signal(HashSet::<String>::new());
+    // Nested explorations / branches / subagents fold under their parent. A nest is
+    // open while its family is in use; a manual toggle (keyed by parent id) overrides that.
+    let nest_choice = create_rw_signal(HashMap::<String, bool>::new());
     let selecting_sessions = create_rw_signal(false);
+    let needs_you_only = create_rw_signal(false);
+    create_effect(move |_| {
+        project_info.track();
+        needs_you_only.set(false);
+    });
+    let attention_rows = create_memo(move |_| {
+        let Some(project) = project_info.get() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<_> = inbox_sessions
+            .get()
+            .into_iter()
+            .filter(|session| session.project_id == project.id)
+            .collect();
+        // Live approval events arrive before the saved inbox refresh. Include
+        // those immediately without counting a session twice.
+        let live = attention.get();
+        for session in sessions.get() {
+            if live.contains(&session.id) && !rows.iter().any(|row| row.id == session.id) {
+                rows.push(SessionSearchInfo {
+                    id: session.id,
+                    project_id: project.id.clone(),
+                    project_name: project.name.clone(),
+                    title: session.title,
+                    ts: session.ts,
+                    activity_at: session.ts,
+                    status: "needs_you".into(),
+                    shelved: false,
+                });
+            }
+        }
+        rows
+    });
+    let session_attention = create_memo(move |_| {
+        attention_rows.with(|rows| {
+            rows.iter()
+                .map(|row| row.id.clone())
+                .collect::<HashSet<_>>()
+        })
+    });
     let selected_sessions = create_rw_signal::<HashSet<String>>(HashSet::new());
-    let bulk_move_target = create_rw_signal(String::new());
+    let bulk_move_open = create_rw_signal(false);
+    // The group being dragged to a new slot, with its index in `folders`.
+    let drag_folder = create_rw_signal::<Option<(String, usize)>>(None);
     let new_session_shortcut = if is_mac() { "⌘N" } else { "Ctrl+N" };
     let search_shortcut = if is_mac() { "⌘K" } else { "Ctrl+K" };
     create_effect(move |_| {
@@ -217,10 +255,12 @@ pub(super) fn Sidebar(
         selected_sessions.update(|selected| selected.retain(|id| available.contains(id)));
     });
     window_capture_escape(move || {
-        if !sort_menu_open.get_untracked() {
+        // Only one of the two head menus is ever open.
+        if !sort_menu_open.get_untracked() && !bulk_move_open.get_untracked() {
             return false;
         }
         sort_menu_open.set(false);
+        bulk_move_open.set(false);
         true
     });
     // Short windows fold the tail of the nav into a "More" flyout instead of
@@ -234,7 +274,7 @@ pub(super) fn Sidebar(
         true
     });
     let never = Signal::derive(|| false);
-    let nav_entries: [NavEntry; 5] = [
+    let nav_entries: [NavEntry; 6] = [
         (
             "folder-plus",
             "sidebar.new_folder",
@@ -249,6 +289,13 @@ pub(super) fn Sidebar(
             "nav-tier-1",
             research_journey_open.into(),
             open_research_graph,
+        ),
+        (
+            "notebook",
+            "sidebar.memos",
+            "nav-tier-1",
+            memos_open,
+            open_memos,
         ),
         (
             "book",
@@ -353,37 +400,106 @@ pub(super) fn Sidebar(
                 let sort_opts = [("newest", "sidebar.sort_newest"), ("name", "sidebar.sort_name")];
                 view! {
                     <div class="side-sessions-head">
-                        <span class="side-sessions-title">{t(loc, "sidebar.sessions")}</span>
-                        <div class="side-sessions-head-actions">
-                            <button type="button" class="side-select-btn"
-                                disabled=move || sessions.get().is_empty()
-                                aria-pressed=move || selecting_sessions.get().to_string()
-                                on:click=move |_| {
-                                    let next = !selecting_sessions.get_untracked();
-                                    selecting_sessions.set(next);
-                                    selected_sessions.set(HashSet::new());
-                                    bulk_move_target.set(String::new());
-                                    sort_menu_open.set(false);
-                                }>
-                                {move || t(locale.get(), if selecting_sessions.get() { "settings.cancel" } else { "sidebar.select_sessions" })}
-                            </button>
-                            <button type="button" class="icon-btn side-shelved-btn"
-                                title=move || t(locale.get(), "session.shelved")
-                                aria-label=move || t(locale.get(), "session.shelved")
-                                on:click=move |ev| { sort_menu_open.set(false); open_shelved.call(ev); }>
-                                {compose_icon("eye-off")}
-                            </button>
-                            <button type="button" class="icon-btn side-sort-btn"
-                                class:active=move || sort_menu_open.get()
-                                title=move || t(locale.get(), "sidebar.sort_group")
-                                aria-label=move || t(locale.get(), "sidebar.sort_group")
-                                on:click=move |ev: web_sys::MouseEvent| {
-                                    ev.stop_propagation();
-                                    sort_menu_open.update(|v| *v = !*v);
-                                }>
-                                {compose_icon("adjustments")}
-                            </button>
-                        </div>
+                        // Selecting swaps the header for the bulk toolbar in place, so
+                        // the list below never shifts.
+                        {move || if selecting_sessions.get() {
+                            let count = selected_sessions.get().len();
+                            let all_selected = count > 0 && count == sessions.get().len();
+                            let delete_selected = bulk_delete_sessions.clone();
+                            let any_selected = count != 0;
+                            let checked = if all_selected { "true" } else if any_selected { "mixed" } else { "false" };
+                            view! {
+                                <button type="button" class="side-bulk-all" role="checkbox"
+                                    aria-checked=checked
+                                    aria-label=t(loc, "sidebar.select_all")
+                                    title=t(loc, if all_selected { "sidebar.clear_selection" } else { "sidebar.select_all" })
+                                    on:click=move |_| {
+                                        if all_selected {
+                                            selected_sessions.set(HashSet::new());
+                                        } else {
+                                            selected_sessions.set(sessions.get_untracked().into_iter().map(|s| s.id).collect());
+                                        }
+                                    }>
+                                    <span class="session-select-mark" class:on=any_selected aria-hidden="true">
+                                        {compose_icon(if any_selected && !all_selected { "minus" } else { "check" })}
+                                    </span>
+                                    <span>{if count == 0 {
+                                        t(loc, "sidebar.select_all").to_string()
+                                    } else {
+                                        tf(loc, "sidebar.selected_n", &[("n", &count.to_string())])
+                                    }}</span>
+                                </button>
+                                <div class="side-sessions-head-actions" role="toolbar"
+                                    aria-label=t(loc, "sidebar.bulk_actions")>
+                                    <button type="button" class="icon-btn side-sort-btn"
+                                        data-testid="bulk-move-sessions"
+                                        class:active=move || bulk_move_open.get()
+                                        disabled=count == 0
+                                        aria-haspopup="menu"
+                                        title=t(loc, "sidebar.move_selected")
+                                        aria-label=t(loc, "sidebar.move_selected")
+                                        on:click=move |ev: web_sys::MouseEvent| {
+                                            ev.stop_propagation();
+                                            bulk_move_open.update(|v| *v = !*v);
+                                        }>
+                                        {compose_icon("folder-move")}
+                                    </button>
+                                    <button type="button" class="icon-btn side-sort-btn side-bulk-delete"
+                                        data-testid="bulk-delete-sessions"
+                                        disabled=count == 0
+                                        title=t(loc, "ctx.delete_session")
+                                        aria-label=t(loc, "ctx.delete_session")
+                                        on:click=move |_| {
+                                            let ids: Vec<String> = selected_sessions.get_untracked().into_iter().collect();
+                                            if !ids.is_empty() {
+                                                delete_selected.call(ids);
+                                            }
+                                        }>
+                                        {compose_icon("trash")}
+                                    </button>
+                                    <button type="button" class="side-select-btn"
+                                        on:click=move |_| {
+                                            selecting_sessions.set(false);
+                                            selected_sessions.set(HashSet::new());
+                                            bulk_move_open.set(false);
+                                        }>
+                                        {t(loc, "settings.cancel")}
+                                    </button>
+                                </div>
+                            }.into_view()
+                        } else {
+                            view! {
+                                <span class="side-sessions-title">{t(loc, "sidebar.sessions")}</span>
+                                <div class="side-sessions-head-actions">
+                                    <button type="button" class="side-select-btn"
+                                        disabled=move || sessions.get().is_empty()
+                                        on:click=move |_| {
+                                            needs_you_only.set(false);
+                                            selecting_sessions.set(true);
+                                            selected_sessions.set(HashSet::new());
+                                            sort_menu_open.set(false);
+                                        }>
+                                        {t(loc, "sidebar.select_sessions")}
+                                    </button>
+                                    <button type="button" class="icon-btn side-shelved-btn"
+                                        title=move || t(locale.get(), "session.shelved")
+                                        aria-label=move || t(locale.get(), "session.shelved")
+                                        on:click=move |ev| { sort_menu_open.set(false); open_shelved.call(ev); }>
+                                        {compose_icon("eye-off")}
+                                    </button>
+                                    <button type="button" class="icon-btn side-sort-btn"
+                                        class:active=move || sort_menu_open.get()
+                                        title=move || t(locale.get(), "sidebar.sort_group")
+                                        aria-label=move || t(locale.get(), "sidebar.sort_group")
+                                        on:click=move |ev: web_sys::MouseEvent| {
+                                            ev.stop_propagation();
+                                            sort_menu_open.update(|v| *v = !*v);
+                                        }>
+                                        {compose_icon("adjustments")}
+                                    </button>
+                                </div>
+                            }.into_view()
+                        }}
                         {move || sort_menu_open.get().then(|| view! {
                             <div class="side-sort-backdrop" on:click=move |_| sort_menu_open.set(false)></div>
                             <div class="side-sort-menu" role="menu" on:click=|ev: web_sys::MouseEvent| ev.stop_propagation()>
@@ -412,74 +528,64 @@ pub(super) fn Sidebar(
                                 </div>
                             </div>
                         })}
-                    </div>
-                    {move || selecting_sessions.get().then(|| {
-                        let count = selected_sessions.get().len();
-                        let all_selected = count > 0 && count == sessions.get().len();
-                        let move_selected = bulk_move_sessions.clone();
-                        let delete_selected = bulk_delete_sessions.clone();
-                        view! {
-                            <div class="side-bulk-actions" role="toolbar"
-                                aria-label=t(loc, "sidebar.bulk_actions")>
-                                <div class="side-bulk-summary">
-                                    <button type="button" class="side-bulk-link"
-                                        on:click=move |_| {
-                                            if all_selected {
-                                                selected_sessions.set(HashSet::new());
-                                            } else {
-                                                selected_sessions.set(sessions.get_untracked().into_iter().map(|s| s.id).collect());
-                                            }
-                                        }>
-                                        {t(loc, if all_selected { "sidebar.clear_selection" } else { "sidebar.select_all" })}
-                                    </button>
-                                    <span>{tf(loc, "sidebar.selected_n", &[("n", &count.to_string())])}</span>
-                                </div>
-                                <div class="side-bulk-controls">
-                                    <select data-testid="bulk-move-sessions"
-                                        aria-label=t(loc, "sidebar.move_selected")
-                                        disabled=count == 0
-                                        prop:value=move || bulk_move_target.get()
-                                        on:change=move |ev| {
-                                            let target = dom_value(&ev);
-                                            if target.is_empty() {
-                                                return;
-                                            }
-                                            let ids: Vec<String> = selected_sessions.get_untracked().into_iter().collect();
-                                            let folder_id = (target != "__ungrouped__").then_some(target);
-                                            bulk_move_target.set(String::new());
-                                            if !ids.is_empty() {
-                                                move_selected.call((ids, folder_id));
-                                                selected_sessions.set(HashSet::new());
-                                                selecting_sessions.set(false);
-                                            }
-                                        }>
-                                        <option value="" disabled=true>{t(loc, "sidebar.move_selected")}</option>
-                                        <option value="__ungrouped__">{t(loc, "ctx.move_to_ungrouped")}</option>
-                                        {move || folders.get().into_iter().map(|folder| {
+                        {move || bulk_move_open.get().then(|| {
+                            let move_selected = bulk_move_sessions.clone();
+                            let move_to = Callback::new(move |folder_id: Option<String>| {
+                                let ids: Vec<String> = selected_sessions.get_untracked().into_iter().collect();
+                                bulk_move_open.set(false);
+                                if !ids.is_empty() {
+                                    move_selected.call((ids, folder_id));
+                                    selected_sessions.set(HashSet::new());
+                                    selecting_sessions.set(false);
+                                }
+                            });
+                            view! {
+                                <div class="side-sort-backdrop" on:click=move |_| bulk_move_open.set(false)></div>
+                                <div class="side-sort-menu side-bulk-move-menu" role="menu" data-testid="bulk-move-menu">
+                                    <div class="side-sort-label">{t(loc, "sidebar.move_selected")}</div>
+                                    <div class="side-sort-opts">
+                                        <button type="button" class="side-sort-opt" role="menuitem" data-folder-id=""
+                                            on:click=move |_| move_to.call(None)>
+                                            <span>{t(loc, "ctx.move_to_ungrouped")}</span>
+                                        </button>
+                                        {folders.get().into_iter().map(|folder| {
                                             let name = if folder.name.trim().is_empty() {
-                                                t(locale.get(), "folder.untitled")
+                                                t(loc, "folder.untitled").to_string()
                                             } else {
                                                 folder.name
                                             };
-                                            view! { <option value=folder.id>{name}</option> }
-                                        }).collect_view()}
-                                    </select>
-                                    <button type="button" class="side-bulk-delete"
-                                        data-testid="bulk-delete-sessions"
-                                        disabled=count == 0
-                                        on:click=move |_| {
-                                            let ids: Vec<String> = selected_sessions.get_untracked().into_iter().collect();
-                                            if !ids.is_empty() {
-                                                delete_selected.call(ids);
+                                            let id = folder.id.clone();
+                                            view! {
+                                                <button type="button" class="side-sort-opt" role="menuitem"
+                                                    data-folder-id=folder.id title=name.clone()
+                                                    on:click=move |_| move_to.call(Some(id.clone()))>
+                                                    <span>{name}</span>
+                                                </button>
                                             }
-                                        }>
-                                        {t(loc, "ctx.delete_session")}
-                                    </button>
+                                        }).collect_view()}
+                                    </div>
                                 </div>
-                            </div>
-                        }
-                    })}
+                            }
+                        })}
+                    </div>
                 }
+            })}
+            {move || (!demo_mode.get() && !selecting_sessions.get()
+                && (!attention_rows.get().is_empty() || needs_you_only.get())).then(|| view! {
+                <div class="side-session-filters" role="group" aria-label=move || t(locale.get(), "sidebar.sessions")>
+                    <button type="button" data-testid="sidebar-all-sessions"
+                        aria-pressed=move || (!needs_you_only.get()).to_string()
+                        on:click=move |_| needs_you_only.set(false)>
+                        {move || t(locale.get(), "sidebar.all_sessions")}
+                    </button>
+                    <button type="button" data-testid="sidebar-needs-you"
+                        aria-pressed=move || needs_you_only.get().to_string()
+                        title=move || t(locale.get(), "sess_status.needs_you_hint")
+                        on:click=move |_| needs_you_only.set(true)>
+                        {compose_icon("circle-alert")}
+                        {move || tf(locale.get(), "sess_status.needs_you_n", &[("n", &attention_rows.get().len().to_string())])}
+                    </button>
+                </div>
             })}
             <div class="side-list">
                 {move || {
@@ -514,6 +620,34 @@ pub(super) fn Sidebar(
                                             open_demo_btn.call((ev, d_actions.id.clone(), d_actions.title.clone()));
                                         }>{compose_icon("more")}</button>
                                 </div>
+                            }
+                        }).collect_view();
+                    }
+                    if needs_you_only.get() {
+                        let pending = attention_rows.get();
+                        if pending.is_empty() {
+                            return view! { <div class="side-hint">{t(loc, "inbox.empty")}</div> }.into_view();
+                        }
+                        // A flat inbox makes old, nested and folded-away sessions
+                        // reachable without changing the saved grouping choices.
+                        return pending.into_iter().map(|session| {
+                            let id = session.id.clone();
+                            let active_id = id.clone();
+                            let title = if session.title.trim().is_empty() {
+                                t(loc, "sidebar.untitled").to_string()
+                            } else {
+                                session.title
+                            };
+                            view! {
+                                <button type="button" class="side-item side-attention-item"
+                                    data-testid="sidebar-attention-session" data-session-id=session.id
+                                    class:active=move || active_session.get().as_deref() == Some(active_id.as_str())
+                                    title=format!("{} · {}", title, t(loc, "sess_status.needs_you"))
+                                    on:click=move |_| load_session.call(id.clone())>
+                                    <span class="side-attention-icon" aria-hidden="true">{compose_icon("circle-alert")}</span>
+                                    <span class="ses-title">{title}</span>
+                                    <span class="ses-status-label needs-you">{t(loc, "sess_status.needs_you")}</span>
+                                </button>
                             }
                         }).collect_view();
                     }
@@ -561,15 +695,35 @@ pub(super) fn Sidebar(
                     // zone available (so a session can be dragged out of a folder) without
                     // reading drag_session here, which would rebuild the whole list mid-drag.
                     let has_folders = !folder_list.is_empty();
-                    let item = move |s: &SessionInfo| {
+                    // `nest` is the parent-only disclosure control drawn over the status slot.
+                    let row = move |s: &SessionInfo, nest: Option<View>| {
                         let is_branch = s.branch_state.is_some();
+                        let is_subagent = s.dispatched_from.is_some();
+                        // Nested rows carry their kind in the status slot instead of a group header.
+                        let kind = if is_subagent {
+                            Some(("bot", t(loc, "subagent.group")))
+                        } else if is_branch {
+                            Some(("branch", t(loc, "branch.group")))
+                        } else {
+                            None
+                        };
+                        let kind_label = kind.as_ref().map(|(_, label)| label.to_string());
                         let has_branch_family = branch_family_ids.contains(&s.id);
                         let has_exploration_round = exploration_source_ids.contains(&s.id);
                         let id = s.id.clone();
                         let id_active = id.clone();
                         let id_attr = id.clone();
                         let id_running = id.clone();
-                        let id_attention = id.clone();
+                        let id_status = id.clone();
+                        let session_status = Signal::derive(move || {
+                            if session_attention.with(|ids| ids.contains(&id_status)) {
+                                Some(SessionStatusKind::NeedsYou)
+                            } else if running.with(|ids| ids.contains(&id_status)) {
+                                Some(SessionStatusKind::Running)
+                            } else {
+                                None
+                            }
+                        });
                         let id_drag = id.clone();
                         let id_dragcls = id.clone();
                         let id_selected = id.clone();
@@ -605,10 +759,14 @@ pub(super) fn Sidebar(
                                 <button type="button" class="side-item ses"
                                     class:pinned=pinned
                                     class:branch-session=is_branch
-                                    title=title_tooltip
+                                    title=move || session_status.get().map_or_else(
+                                        || title_tooltip.clone(),
+                                        |status| format!("{} · {}", title_tooltip, t(locale.get(), status.i18n_key())),
+                                    )
+                                    aria-description=kind_label
                                     class:active=move || active_session.get().as_deref() == Some(id_active.as_str())
                                     class:running=move || running.get().contains(&id_running)
-                                    class:attention=move || attention.get().contains(&id_attention)
+                                    class:attention=move || session_status.get() == Some(SessionStatusKind::NeedsYou)
                                     class:dragging=move || drag_session.get().as_deref() == Some(id_dragcls.as_str())
                                     class:selecting=move || selecting_sessions.get()
                                     class:selected=move || selected_sessions.get().contains(&id_selected)
@@ -621,6 +779,7 @@ pub(super) fn Sidebar(
                                     data-session-pinned=if pinned { "true" } else { "false" }
                                     data-session-stale=if stale_prompt { "true" } else { "false" }
                                     data-session-branch=if is_branch { "true" } else { "false" }
+                                    data-session-subagent=if is_subagent { "true" } else { "false" }
                                     data-session-family=if has_branch_family { "true" } else { "false" }
                                     data-exploration-round=if has_exploration_round { "true" } else { "false" }
                                     data-branch-merged=if branch_merged { "true" } else { "false" }
@@ -655,7 +814,7 @@ pub(super) fn Sidebar(
                                             ev.prevent_default();
                                             return;
                                         }
-                                        start_session_drag(&ev, &id_drag);
+                                        start_conversation_drag(&ev, &id_drag);
                                         drag_session.set(Some(id_drag.clone()));
                                     }
                                     on:dragend=move |_| {
@@ -670,13 +829,19 @@ pub(super) fn Sidebar(
                                         <span class="ses-attention" title=move || t(locale.get(), "sess_status.needs_you")>
                                             {compose_icon("circle-alert")}
                                         </span>
+                                        {kind.map(|(icon, label)| view! {
+                                            <span class="session-branch-icon" title=label>{compose_icon(icon)}</span>
+                                        })}
                                     </span>
                                     <span class="ses-initial" aria-hidden="true">{initial}</span>
-                                    {is_branch.then(|| view! {
-                                        <span class="session-branch-icon" aria-hidden="true">{compose_icon("branch")}</span>
-                                    })}
                                     <span class="ses-title">{title}</span>
+                                    {move || session_status.get().map(|status| view! {
+                                        <span class=format!("ses-status-label {}", status.css())>
+                                            {t(locale.get(), status.i18n_key())}
+                                        </span>
+                                    })}
                                 </button>
+                                {nest}
                                 <button type="button" class="session-actions"
                                     class:selection-hidden=move || selecting_sessions.get()
                                     disabled=move || selecting_sessions.get()
@@ -685,7 +850,7 @@ pub(super) fn Sidebar(
                                     on:click=move |ev: web_sys::MouseEvent| {
                                         ev.prevent_default();
                                         ev.stop_propagation();
-                                        show_actions.call((ev, id_actions.clone(), title_actions.clone(), pinned, is_branch, branch_merged, has_branch_family, has_exploration_round, stale_prompt));
+                                        show_actions.call((ev, id_actions.clone(), title_actions.clone(), pinned, is_branch, branch_merged, has_exploration_round, stale_prompt));
                                     }>{compose_icon("more")}</button>
                             </div>
                         }.into_view()
@@ -745,80 +910,80 @@ pub(super) fn Sidebar(
                         }.into_view()
                     };
                     let make = move |s: &SessionInfo| {
-                        let kids = branch_kids.get(&s.id).cloned().unwrap_or_default();
+                        // Subagents (#1061) nest like branches, listed after them.
+                        let (subagent_kids, kids): (Vec<SessionInfo>, Vec<SessionInfo>) = branch_kids
+                            .get(&s.id)
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .partition(|kid| kid.dispatched_from.is_some());
                         let exploration_kids = exploration_groups.get(&s.id).cloned().unwrap_or_default();
-                        if kids.is_empty() && exploration_kids.is_empty() {
-                            return item(s);
+                        if kids.is_empty() && subagent_kids.is_empty() && exploration_kids.is_empty() {
+                            return row(s, None);
                         }
-                        let nests = collapsed_nests.get();
-                        let exploration_key = format!("e:{}", s.id);
-                        let branch_key = format!("b:{}", s.id);
-                        let exploration_collapsed = nests.contains(&exploration_key);
-                        let branch_collapsed = nests.contains(&branch_key);
-                        let exploration_count = exploration_kids.len();
-                        let branch_count = kids.len();
-                        let exploration_toggle_key = exploration_key.clone();
-                        let branch_toggle_key = branch_key.clone();
-                        let parent = item(s);
+                        let count = kids.len() + subagent_kids.len() + exploration_kids.len();
+                        let parent_id = s.id.clone();
+                        let kid_ids: Vec<String> = kids
+                            .iter()
+                            .chain(&subagent_kids)
+                            .map(|kid| kid.id.clone())
+                            .chain(exploration_kids.iter().map(|kid| kid.exploration.frame_id.clone()))
+                            .collect();
+                        // Read inside its own closures only, so a toggle or a session switch
+                        // restyles this nest without rebuilding the whole list.
+                        let expanded = {
+                            let parent_id = parent_id.clone();
+                            Signal::derive(move || {
+                                nest_choice.with(|choice| choice.get(&parent_id).copied()).unwrap_or_else(|| {
+                                    active_session.with(|active| running.with(|running| session_attention.with(|attention| {
+                                        nest_in_use(&parent_id, &kid_ids, active.as_deref(), running, attention)
+                                    })))
+                                })
+                            })
+                        };
+                        let toggle_label = move || {
+                            t(loc, if expanded.get() { "sidebar.nest_collapse" } else { "sidebar.nest_expand" })
+                        };
+                        let toggle = view! {
+                            <button type="button" class="side-nest-toggle"
+                                class:collapsed=move || !expanded.get()
+                                data-testid="sidebar-nest-toggle"
+                                aria-expanded=move || expanded.get().to_string()
+                                title=toggle_label
+                                aria-label=toggle_label
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.prevent_default();
+                                    ev.stop_propagation();
+                                    let open = !expanded.get_untracked();
+                                    nest_choice.update(|choice| {
+                                        choice.insert(parent_id.clone(), open);
+                                    });
+                                }>
+                                {compose_icon("chevron-down")}
+                            </button>
+                            <span class="side-nest-count" aria-hidden="true">{count}</span>
+                        }.into_view();
+                        let parent = row(s, Some(toggle));
                         view! {
-                            <div class="side-branch-group">
+                            <div class="side-nest-group" class:collapsed=move || !expanded.get()>
                                 {parent}
-                                {(!exploration_kids.is_empty()).then(|| {
-                                    let exploration_toggle_key = exploration_toggle_key.clone();
-                                    view! {
-                                    <div class="side-exploration-group" data-testid="sidebar-explorations">
-                                        {nest_group_toggle(
-                                            loc,
-                                            "exploration.group",
-                                            "exploration.expand",
-                                            "exploration.collapse",
-                                            exploration_count,
-                                            exploration_collapsed,
-                                            "sidebar-exploration-toggle",
-                                            move |ev: web_sys::MouseEvent| {
-                                                ev.prevent_default();
-                                                ev.stop_propagation();
-                                                collapsed_nests.update(|set| {
-                                                    toggle_collapsed_key(set, exploration_toggle_key.clone());
-                                                });
-                                            },
-                                        )}
-                                        {(!exploration_collapsed).then(|| view! {
-                                            <div class="side-nest-items">
-                                                {exploration_kids.iter().map(&exploration_item).collect_view()}
-                                            </div>
-                                        })}
-                                    </div>
-                                    }
-                                })}
-                                {(!kids.is_empty()).then(|| {
-                                    let branch_toggle_key = branch_toggle_key.clone();
-                                    view! {
-                                    <div class="side-branch-kids" data-testid="sidebar-branches">
-                                        {nest_group_toggle(
-                                            loc,
-                                            "branch.group",
-                                            "branch.expand",
-                                            "branch.collapse",
-                                            branch_count,
-                                            branch_collapsed,
-                                            "sidebar-branch-toggle",
-                                            move |ev: web_sys::MouseEvent| {
-                                                ev.prevent_default();
-                                                ev.stop_propagation();
-                                                collapsed_nests.update(|set| {
-                                                    toggle_collapsed_key(set, branch_toggle_key.clone());
-                                                });
-                                            },
-                                        )}
-                                        {(!branch_collapsed).then(|| view! {
-                                            <div class="side-nest-items">
-                                                {kids.iter().map(&item).collect_view()}
-                                            </div>
-                                        })}
-                                    </div>
-                                    }
-                                })}
+                                <div class="side-nest" data-testid="sidebar-nest">
+                                    {(!exploration_kids.is_empty()).then(|| view! {
+                                        <div class="side-nest-items" data-testid="sidebar-explorations">
+                                            {exploration_kids.iter().map(&exploration_item).collect_view()}
+                                        </div>
+                                    })}
+                                    {(!kids.is_empty()).then(|| view! {
+                                        <div class="side-nest-items" data-testid="sidebar-branches">
+                                            {kids.iter().map(|kid| row(kid, None)).collect_view()}
+                                        </div>
+                                    })}
+                                    {(!subagent_kids.is_empty()).then(|| view! {
+                                        <div class="side-nest-items" data-testid="sidebar-subagents">
+                                            {subagent_kids.iter().map(|kid| row(kid, None)).collect_view()}
+                                        </div>
+                                    })}
+                                </div>
                             </div>
                         }.into_view()
                     };
@@ -853,12 +1018,37 @@ pub(super) fn Sidebar(
                         .collect();
                     let (today, earlier) = bucket_sessions_by_date(&ungrouped);
                     let move_to = move_sessions_to.clone();
-                    let folder_views = folder_list.into_iter().map(|f| {
+                    let folder_views = folder_list.into_iter().enumerate().map(|(idx, f)| {
                         let fid = f.id.clone();
                         let fid_toggle = fid.clone();
                         let fid_drop = fid.clone();
                         let fid_target = format!("folder:{fid_drop}");
-                        let fid_target_over = fid_target.clone();
+                        let reorder_before = format!("before:{fid}");
+                        let reorder_after = format!("after:{fid}");
+                        // A session hovers the group to move into it; another group
+                        // hovers it to take its slot, landing on the side it came from.
+                        let hover = {
+                            let fid = fid.clone();
+                            let (into, before, after) = (fid_target.clone(), reorder_before.clone(), reorder_after.clone());
+                            move |ev: web_sys::DragEvent| {
+                                let target = match drag_folder.get_untracked() {
+                                    Some((src, _)) if src == fid => None,
+                                    Some((_, from)) if from > idx => Some(before.clone()),
+                                    Some(_) => Some(after.clone()),
+                                    None => Some(into.clone()),
+                                };
+                                if target.is_some() {
+                                    allow_drop(&ev);
+                                }
+                                if drop_target.get_untracked() != target {
+                                    drop_target.set(target);
+                                }
+                            }
+                        };
+                        let hover_enter = hover.clone();
+                        let reorder = reorder_folders;
+                        let fid_drag = fid.clone();
+                        let fid_dragcls = fid.clone();
                         let fname = if f.name.trim().is_empty() {
                             t(loc, "folder.untitled").into()
                         } else {
@@ -871,8 +1061,23 @@ pub(super) fn Sidebar(
                             .cloned()
                             .collect();
                         let fid_target_cls = fid_target.clone();
-                        let fid_target_over_enter = fid_target_over.clone();
                         let fid_rename = fid.clone();
+                        let folder_ids: Vec<String> = in_folder.iter().map(|s| s.id.clone()).collect();
+                        let folder_total = folder_ids.len();
+                        // How many of this group's own rows are ticked; nested rows are picked one by one.
+                        let folder_selected = {
+                            let ids = folder_ids.clone();
+                            Signal::derive(move || {
+                                let selected = selected_sessions.get();
+                                ids.iter().filter(|id| selected.contains(*id)).count()
+                            })
+                        };
+                        let folder_any = move || folder_selected.get() != 0;
+                        let folder_checked = move || match folder_selected.get() {
+                            0 => "false",
+                            n if n == folder_total => "true",
+                            _ => "mixed",
+                        };
                         let fname_rename = fname.clone();
                         let fid_actions = fid.clone();
                         let fname_actions = fname.clone();
@@ -880,33 +1085,55 @@ pub(super) fn Sidebar(
                         view! {
                             <div class="side-folder-wrap"
                                 class:drop-target=move || drop_target.get().as_deref() == Some(fid_target_cls.as_str())
+                                class:reorder-before=move || drop_target.get().as_deref() == Some(reorder_before.as_str())
+                                class:reorder-after=move || drop_target.get().as_deref() == Some(reorder_after.as_str())
                                 data-folder-id=fid.clone()
-                                on:dragenter=move |ev: web_sys::DragEvent| {
-                                    allow_drop(&ev);
-                                    if drop_target.get().as_deref() != Some(fid_target_over_enter.as_str()) {
-                                        drop_target.set(Some(fid_target_over_enter.clone()));
-                                    }
-                                }
-                                on:dragover=move |ev: web_sys::DragEvent| {
-                                    allow_drop(&ev);
-                                    if drop_target.get().as_deref() != Some(fid_target_over.as_str()) {
-                                        drop_target.set(Some(fid_target_over.clone()));
-                                    }
-                                }
+                                on:dragenter=hover_enter
+                                on:dragover=hover
                                 on:drop=move |ev: web_sys::DragEvent| {
                                     ev.prevent_default();
                                     ev.stop_propagation();
-                                    let sid = drag_session_id(&ev, drag_session.get());
+                                    let dragged_folder = drag_folder.get_untracked();
+                                    drag_folder.set(None);
+                                    let sid = drag_session_id(&ev, drag_session.get_untracked());
                                     drag_session.set(None);
                                     drop_target.set(None);
-                                    if let Some(id) = sid {
+                                    if let Some((src, _)) = dragged_folder {
+                                        let mut ids: Vec<String> = folders.get_untracked().into_iter().map(|f| f.id).collect();
+                                        let from = ids.iter().position(|id| *id == src);
+                                        let to = ids.iter().position(|id| *id == fid_drop);
+                                        if let (Some(from), Some(to)) = (from, to) {
+                                            if from != to {
+                                                // Remove-then-insert at the target's old index, like the
+                                                // right-pane tab strip: after it going down, before it going up.
+                                                let moved = ids.remove(from);
+                                                ids.insert(to, moved);
+                                                reorder.call(ids);
+                                            }
+                                        }
+                                    } else if let Some(id) = sid {
                                         move_to.call((vec![id], Some(fid_drop.clone())));
                                     }
                                 }>
                                 <div class="side-folder"
+                                    class:dragging=move || drag_folder.get().is_some_and(|(id, _)| id == fid_dragcls)
+                                    class:selecting=move || selecting_sessions.get()
+                                    attr:draggable=move || if selecting_sessions.get() { "false" } else { "true" }
                                     title=fname_attr.clone()
                                     data-folder-id=fid.clone()
                                     data-folder-name=fname_attr
+                                    on:dragstart=move |ev: web_sys::DragEvent| {
+                                        if selecting_sessions.get_untracked() {
+                                            ev.prevent_default();
+                                            return;
+                                        }
+                                        start_folder_drag(&ev, &fid_drag);
+                                        drag_folder.set(Some((fid_drag.clone(), idx)));
+                                    }
+                                    on:dragend=move |_| {
+                                        drag_folder.set(None);
+                                        drop_target.set(None);
+                                    }
                                     on:click=move |_| {
                                         collapsed_folders.update(|set| {
                                             if set.contains(&fid_toggle) { set.remove(&fid_toggle); }
@@ -920,6 +1147,27 @@ pub(super) fn Sidebar(
                                         folder_modal.set(Some(FolderModal::Rename(fid_rename.clone())));
                                     }>
                                     <span class="side-folder-caret" class:collapsed=collapsed>{compose_icon("chevron-down")}</span>
+                                    // Selecting swaps the folder icon for a tick box over the whole group.
+                                    <button type="button" class="session-select-mark" role="checkbox"
+                                        class:on=folder_any
+                                        aria-checked=folder_checked
+                                        aria-label=move || t(locale.get(), "sidebar.select_all")
+                                        disabled=folder_total == 0
+                                        on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                                        on:click=move |ev: web_sys::MouseEvent| {
+                                            ev.stop_propagation();
+                                            selected_sessions.update(|selected| {
+                                                if folder_ids.iter().all(|id| selected.contains(id)) {
+                                                    for id in &folder_ids {
+                                                        selected.remove(id);
+                                                    }
+                                                } else {
+                                                    selected.extend(folder_ids.iter().cloned());
+                                                }
+                                            });
+                                        }>
+                                        {move || compose_icon(if (1..folder_total).contains(&folder_selected.get()) { "minus" } else { "check" })}
+                                    </button>
                                     {compose_icon("folder")}
                                     <span class="side-folder-name">{fname}</span>
                                     <span class="side-folder-count">{in_folder.len()}</span>
@@ -940,24 +1188,25 @@ pub(super) fn Sidebar(
                             </div>
                         }
                     }).collect_view();
+                    // Groups reorder among themselves only: over the ungrouped zone a
+                    // dragged group has no slot, so it just drops the insertion hint.
+                    let hover_ungrouped = move |ev: web_sys::DragEvent| {
+                        let target = drag_folder.get_untracked().is_none().then(|| "ungrouped".to_string());
+                        if target.is_some() {
+                            allow_drop(&ev);
+                        }
+                        if drop_target.get_untracked() != target {
+                            drop_target.set(target);
+                        }
+                    };
                     view! {
                         {pinned_view}
                         {folder_views}
                         {( !ungrouped.is_empty() || has_folders ).then(|| view! {
                             <div class="side-ungrouped"
                                 class:drop-target=move || drop_target.get().as_deref() == Some("ungrouped")
-                                on:dragenter=move |ev: web_sys::DragEvent| {
-                                    allow_drop(&ev);
-                                    if drop_target.get().as_deref() != Some("ungrouped") {
-                                        drop_target.set(Some("ungrouped".into()));
-                                    }
-                                }
-                                on:dragover=move |ev: web_sys::DragEvent| {
-                                    allow_drop(&ev);
-                                    if drop_target.get().as_deref() != Some("ungrouped") {
-                                        drop_target.set(Some("ungrouped".into()));
-                                    }
-                                }
+                                on:dragenter=hover_ungrouped
+                                on:dragover=hover_ungrouped
                                 on:drop=move |ev: web_sys::DragEvent| {
                                     ev.prevent_default();
                                     ev.stop_propagation();
@@ -983,7 +1232,7 @@ pub(super) fn Sidebar(
             </div>
             {move || {
                 let load_older = load_older_sessions_button.clone();
-                (!demo_mode.get() && session_history_cursor.get().is_some()).then(|| view! {
+                (!demo_mode.get() && !needs_you_only.get() && session_history_cursor.get().is_some()).then(|| view! {
                     <button type="button" class="side-load-more"
                         disabled=move || session_history_loading.get()
                         on:click=move |_| load_older.call(())>

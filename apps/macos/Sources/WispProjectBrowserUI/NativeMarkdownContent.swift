@@ -25,7 +25,7 @@ enum NativeMarkdownContent {
         return NSTextTableBlock(table: table, startingRow: 0, rowSpan: 1, startingColumn: 0, columnSpan: 1)
     }
 
-    static func render(_ source: String, saved: [String], revealed: String? = nil, scheme: ColorScheme, width: CGFloat = 600) -> NSAttributedString {
+    static func render(_ source: String, saved: [String], revealed: String? = nil, scheme: ColorScheme, width: CGFloat = 600, images: [String: NSImage] = [:], unavailableImages: Set<String> = []) -> NSAttributedString {
         let prepared = NativeMathContent.prepare(source)
         guard let parsed = try? AttributedString(markdown: prepared.markdown, options: .init(interpretedSyntax: .full)) else {
             return NativeSelectableMessage.content(AttributedString(source), saved: saved, scheme: scheme)
@@ -57,8 +57,8 @@ enum NativeMarkdownContent {
             let code = block.intents.contains { if case .codeBlock = $0.kind { return true }; return false }
             let value = NSMutableAttributedString(attributedString: NativeSelectableMessage.content(block.text, saved: [], scheme: scheme, monospaced: code))
             let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 6
-            paragraph.paragraphSpacing = 16
+            paragraph.lineSpacing = 4
+            paragraph.paragraphSpacing = 10
             paragraph.lineBreakMode = .byWordWrapping
             var indent = 0
             var listItem: PresentationIntent.IntentType?
@@ -70,7 +70,7 @@ enum NativeMarkdownContent {
                     let base = (value.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 14
                     let size = base * [1.65, 1.4, 1.2, 1.1, 1, 1][min(5, max(0, level - 1))]
                     value.addAttribute(.font, value: NSFont.systemFont(ofSize: size, weight: .semibold), range: NSRange(location: 0, length: value.length))
-                    paragraph.paragraphSpacingBefore = 18
+                    paragraph.paragraphSpacingBefore = 14
                 case .listItem:
                     if listItem == nil { listItem = component }
                 case .orderedList, .unorderedList:
@@ -97,7 +97,8 @@ enum NativeMarkdownContent {
                         prefix = " "
                         break
                     }
-                    let attrs = value.length > 0 ? value.attributes(at: 0, effectiveRange: nil) : [:]
+                    var attrs = value.length > 0 ? value.attributes(at: 0, effectiveRange: nil) : [:]
+                    attrs.removeValue(forKey: NativeImageContent.referenceKey)
                     value.insert(NSAttributedString(string: prefix, attributes: attrs), at: 0)
                     if let task {
                         let attachment = NSTextAttachment(); attachment.attachmentCell = NativeTaskCell(checked: task != "[ ] ")
@@ -117,9 +118,9 @@ enum NativeMarkdownContent {
                 value.addAttributes([copyBlockID: "code-\(block.identity ?? 0)", codeCopy: String(block.text.characters), .backgroundColor: NSColor(WispDesign.color("bg-sunken", scheme))], range: NSRange(location: 0, length: value.length))
                 let box = fullWidthBlock()
                 box.backgroundColor = NSColor(WispDesign.color("bg-sunken", scheme))
-                box.setWidth(12, type: .absoluteValueType, for: .padding)
-                box.setWidth(34, type: .absoluteValueType, for: .padding, edge: .minY)
-                box.setWidth(12, type: .absoluteValueType, for: .margin, edge: .maxY)
+                box.setWidth(10, type: .absoluteValueType, for: .padding)
+                box.setWidth(40, type: .absoluteValueType, for: .padding, edge: .maxX)
+                box.setWidth(8, type: .absoluteValueType, for: .margin, edge: .maxY)
                 box.setWidth(0.5, type: .absoluteValueType, for: .border)
                 box.setBorderColor(NSColor(WispDesign.color("border", scheme)))
                 paragraph.textBlocks = [box]
@@ -158,7 +159,8 @@ enum NativeMarkdownContent {
             // A paragraph separator is essential: full Markdown parsing strips
             // block delimiters. Preserve fenced-code line breaks exactly.
             if !value.string.hasSuffix("\n") {
-                let attributes = value.length > 0 ? value.attributes(at: value.length - 1, effectiveRange: nil) : [:]
+                var attributes = value.length > 0 ? value.attributes(at: value.length - 1, effectiveRange: nil) : [:]
+                attributes.removeValue(forKey: NativeImageContent.referenceKey)
                 value.append(NSAttributedString(string: "\n", attributes: attributes))
             }
             // Empty cells still own a paragraph and belong to the table's
@@ -171,7 +173,14 @@ enum NativeMarkdownContent {
             value.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: value.length))
             result.append(value)
         }
+        if result.length > 0, let last = result.attribute(.paragraphStyle, at: result.length - 1, effectiveRange: nil) as? NSParagraphStyle,
+           let compact = last.mutableCopy() as? NSMutableParagraphStyle {
+            compact.paragraphSpacing = 0
+            let range = (result.string as NSString).paragraphRange(for: NSRange(location: result.length - 1, length: 0))
+            result.addAttribute(.paragraphStyle, value: compact, range: range)
+        }
         NativeMathContent.replace(in: result, formulas: prepared.formulas, scheme: scheme, width: width)
+        NativeImageContent.replace(in: result, images: images, unavailable: unavailableImages, width: width)
         let plain = NativeMathContent.plainText(result)
         func range(_ match: Range<Int>) -> NSRange {
             let start = plain.index(plain.startIndex, offsetBy: match.lowerBound)

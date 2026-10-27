@@ -26,6 +26,7 @@ mod app_state;
 mod app_updates;
 mod approval_commands;
 mod artifact_commands;
+mod branch_tool;
 mod browser_bridge;
 mod browser_url_filters;
 mod channels;
@@ -38,6 +39,7 @@ mod configure;
 mod connector_commands;
 mod context_probe;
 mod debug_request;
+mod decision_model;
 mod delegation_completion;
 mod delegation_isolation;
 mod delegation_resources;
@@ -48,14 +50,28 @@ mod depmap_remote_compute;
 mod desktop_lifecycle;
 mod device_bridge;
 mod device_hub;
+mod dispatch;
 mod dynamic_workflow;
 mod exploration_commands;
+#[cfg(target_os = "macos")]
+mod mac_notifications;
+mod native_assistant;
 mod native_calendar;
+mod native_composer;
 mod native_conversations;
+mod native_files;
+mod native_history;
+#[cfg(target_os = "macos")]
+mod native_host_lifecycle;
 mod native_journey;
 mod native_library;
+mod native_message_images;
 mod native_projects;
 mod native_publication;
+mod native_queue;
+mod native_search;
+mod native_session_export;
+mod native_session_transfer;
 mod native_settings;
 mod privacy_mode;
 pub(crate) use wisp_runs::exploration_isolation;
@@ -78,6 +94,9 @@ mod model_catalog;
 // The runtime only uses lookup()/types; build.rs uses distill() instead.
 #[cfg(test)]
 mod dto_contract_tests;
+mod mandate_report;
+mod mandates;
+mod memory_tidy;
 #[allow(dead_code)]
 mod model_catalog_shared;
 mod models;
@@ -87,6 +106,7 @@ mod plan_mode;
 mod plugins;
 mod project_commands;
 mod project_reader;
+mod project_status;
 mod project_sync;
 mod project_transfer;
 mod publication_capsule;
@@ -110,8 +130,9 @@ mod native_run_review;
 mod native_share;
 mod native_terminals;
 mod network;
-mod research_dispatch;
+mod notification_sound;
 mod research_dispatch_approval;
+mod run_background;
 mod runtime_commands;
 mod runtime_config_tool;
 mod runtime_launcher;
@@ -119,6 +140,7 @@ mod scheduler;
 mod seed;
 mod session_commands;
 mod session_context_tool;
+mod session_experience;
 mod session_export;
 mod session_import;
 mod settings_commands;
@@ -128,15 +150,20 @@ mod skill_commands;
 mod skill_portfolio;
 mod skill_store;
 pub(crate) use wisp_runs::snapshot_store;
+mod specialist_package;
 mod specialist_tool;
 mod specialists;
 pub(crate) use wisp_runs::ssh_guard;
 mod ssh_hosts;
 pub(crate) use wisp_runs::ssh_master;
 mod clipboard_files;
+mod expert_tool;
 mod mcp_app_child_commands;
 mod mcp_app_children;
 mod storage_prefs;
+mod subagent_activity;
+mod subagent_tool;
+mod swarm_progress;
 mod terminal_sessions;
 mod trajectory;
 mod trajectory_export;
@@ -344,11 +371,29 @@ enum AgentEvent {
         frame_id: String,
         questions: Vec<String>,
     },
+    /// AfterTurn: a branch the agent asked for with `open_branch` now exists
+    /// (`branch_tool`). Windows refresh the sidebar and keep `brief` as the
+    /// branch's composer draft. Not persisted: the parent's notice is.
+    BranchOpened {
+        frame_id: String,
+        branch_id: String,
+        title: String,
+        brief: String,
+    },
     /// A hook failed; the turn it ran for is unaffected.
     HookFailed {
         frame_id: String,
         hook: String,
         message: String,
+    },
+    /// A Run the user moved to the background ended (`run_background`).
+    /// Windows raise a desktop notification; not persisted, the notice
+    /// appended to the conversation is.
+    RunBackgroundFinished {
+        frame_id: String,
+        run_id: String,
+        title: String,
+        status: String,
     },
 }
 
@@ -382,7 +427,9 @@ impl AgentEvent {
             | Self::CorrectionStarted { frame_id, .. }
             | Self::MemoryProposal { frame_id, .. }
             | Self::FollowUps { frame_id, .. }
-            | Self::HookFailed { frame_id, .. } => frame_id,
+            | Self::BranchOpened { frame_id, .. }
+            | Self::HookFailed { frame_id, .. }
+            | Self::RunBackgroundFinished { frame_id, .. } => frame_id,
         }
     }
 }
@@ -652,8 +699,14 @@ fn parse_confirm_payload(message: &str) -> (String, String) {
             return (tool.to_string(), String::new());
         }
     }
-    if message.starts_with("Dangerous command detected") {
-        if let Some((_, cmd)) = message.rsplit_once(": ") {
+    if let Some(rest) = message.strip_prefix("Dangerous command detected") {
+        // The command itself may contain ": ", so split only after our own
+        // "(label)" prefix (or the bare ": " of the label-less form).
+        let cmd = rest
+            .split_once("): ")
+            .map(|(_, cmd)| cmd)
+            .or_else(|| rest.strip_prefix(": "));
+        if let Some(cmd) = cmd {
             return ("shell".into(), cmd.to_string());
         }
     }
@@ -672,6 +725,7 @@ struct SkillInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     managed_by: Option<String>,
     dir: String,
+    copies: Vec<wisp_dto::SkillCopy>,
 }
 
 #[derive(Serialize, Clone)]
@@ -710,34 +764,11 @@ struct SessionSearchInfo {
     ts: i64,
     activity_at: i64,
     status: String,
+    /// Shelved rows only answer keyword searches that opt in (`includeShelved`).
+    shelved: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ComposerReferenceArg {
-    Artifact {
-        id: String,
-    },
-    Session {
-        id: String,
-    },
-    Project {
-        id: String,
-    },
-    Skill {
-        name: String,
-    },
-    Workflow {
-        id: String,
-    },
-    Context {
-        id: String,
-    },
-    Runtime {
-        context_id: String,
-        language: String,
-    },
-}
+use wisp_dto::ComposerReferenceArg;
 
 #[derive(Serialize, Clone)]
 struct ProjectInfo {
@@ -805,6 +836,10 @@ struct McpConnection {
     name: String,
     enabled: bool,
     transport: McpTransport,
+    /// This connection's route: empty inherits Settings → Network → MCP,
+    /// `none` connects directly, anything else is a proxy URL.
+    #[serde(default)]
+    proxy_url: String,
 }
 
 // ── Connectors (multi-level) + per-tool approval ────────────────────────────
@@ -1074,6 +1109,11 @@ struct SessionTranscriptPage {
     head_epoch: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     in_context_from_user_index: Option<usize>,
+    /// Ids still parked in this session's turn queue, on the first page only.
+    /// A window that showed another project missed their lifecycle events, so
+    /// it reconciles its optimistic queue rows against this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queued_turn_ids: Option<Vec<String>>,
 }
 
 use wisp_dto::SessionOutlineItem;
@@ -1217,6 +1257,11 @@ struct UiItem {
     locations: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     resources: Vec<resource_refs::UiMessageResource>,
+    /// Persisted message `seq` this row was folded from. Rows folded from one
+    /// message keep their emitted order; live rows not yet bound to a saved
+    /// message omit it. Clients key transcript rows by it, never by offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    seq: Option<i64>,
 }
 
 /// Index in `msgs` where the `user_index`‑th user turn starts (0-based user count).
@@ -1255,6 +1300,15 @@ fn messages_to_context_view_items(msgs: &[wisp_llm::Message]) -> Vec<UiItem> {
 }
 
 fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode) -> Vec<UiItem> {
+    messages_to_items_ends(msgs, mode).0
+}
+
+/// Same fold, also returning the item count reached after each message so the
+/// caller can map persisted message seqs onto row ranges without refolding.
+fn messages_to_items_ends(
+    msgs: &[wisp_llm::Message],
+    mode: MessagesToItemsMode,
+) -> (Vec<UiItem>, Vec<usize>) {
     let tool_inputs: HashMap<&str, String> = msgs
         .iter()
         .flat_map(|message| message.tool_calls.iter())
@@ -1264,12 +1318,14 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                 "python" | "r" => args.get("code").and_then(|v| v.as_str()),
                 "shell" => args.get("cmd").and_then(|v| v.as_str()),
                 "monitor_run" | "wisp_monitor_run" => args.get("run_id").and_then(|v| v.as_str()),
+                "generate_image" => args.get("path").and_then(|v| v.as_str()),
                 _ => None,
             }?;
             Some((call.id.as_str(), bounded_ui_tool_input(input)))
         })
         .collect();
     let mut out = vec![];
+    let mut ends = Vec::with_capacity(msgs.len());
     for m in msgs {
         match m.role {
             wisp_llm::Role::User => {
@@ -1288,6 +1344,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                         kind: Some("background_completion".into()),
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 } else if !t.trim().is_empty() {
@@ -1305,6 +1362,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                                 kind: Some("checkpoint".into()),
                                 status: None,
                                 locations: None,
+                                seq: None,
                                 resources: Vec::new(),
                             });
                         }
@@ -1321,6 +1379,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                             kind: None,
                             status: None,
                             locations: None,
+                            seq: None,
                             resources: Vec::new(),
                         });
                     }
@@ -1341,6 +1400,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                             kind: None,
                             status: None,
                             locations: None,
+                            seq: None,
                             resources: Vec::new(),
                         });
                     }
@@ -1359,6 +1419,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                         kind: None,
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 }
@@ -1387,6 +1448,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                             kind: None,
                             status: None,
                             locations: None,
+                            seq: None,
                             resources: Vec::new(),
                         });
                     }
@@ -1404,6 +1466,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                         kind: None,
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 } else if matches!(
@@ -1425,6 +1488,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                         kind: None,
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 } else if let Some(envelope) =
@@ -1442,6 +1506,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                         kind: (!envelope.kind.is_empty()).then_some(envelope.kind),
                         status: Some(envelope.status),
                         locations: (!envelope.locations.is_empty()).then_some(envelope.locations),
+                        seq: None,
                         resources: Vec::new(),
                     });
                 } else {
@@ -1465,6 +1530,7 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                         kind: tombstone.then(|| "tombstone".into()),
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 }
@@ -1485,14 +1551,16 @@ fn messages_to_items_with(msgs: &[wisp_llm::Message], mode: MessagesToItemsMode)
                             kind: Some("system".into()),
                             status: None,
                             locations: None,
+                            seq: None,
                             resources: Vec::new(),
                         });
                     }
                 }
             }
         }
+        ends.push(out.len());
     }
-    out
+    (out, ends)
 }
 
 /// Tool cards need their complete JSON bodies, but ordinary tool output is a
@@ -1621,6 +1689,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                     kind: None,
                     status: None,
                     locations: None,
+                    seq: None,
                     resources: Vec::new(),
                 });
             }
@@ -1693,6 +1762,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                     kind: None,
                     status: None,
                     locations: None,
+                    seq: None,
                     resources: Vec::new(),
                 });
             }
@@ -1721,6 +1791,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                 kind: None,
                 status: None,
                 locations: None,
+                seq: None,
                 resources: Vec::new(),
             }),
             AgentEvent::Error { message, .. } => items.push(UiItem {
@@ -1735,6 +1806,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                 kind: None,
                 status: None,
                 locations: None,
+                seq: None,
                 resources: Vec::new(),
             }),
             AgentEvent::Text { delta, .. } | AgentEvent::Reasoning { delta, .. } => {
@@ -1758,6 +1830,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                         kind: None,
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 }
@@ -1774,6 +1847,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                 kind: None,
                 status: None,
                 locations: None,
+                seq: None,
                 resources: Vec::new(),
             }),
             AgentEvent::ToolResult {
@@ -1812,6 +1886,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                         kind: None,
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                     continue;
@@ -1845,6 +1920,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                             kind: None,
                             status: None,
                             locations: None,
+                            seq: None,
                             resources: Vec::new(),
                         });
                     }
@@ -1866,6 +1942,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                 kind: None,
                 status: None,
                 locations: None,
+                seq: None,
                 resources: Vec::new(),
             }),
             AgentEvent::MessageBoundary { seq, .. } => {
@@ -1894,6 +1971,7 @@ fn events_to_items(events: &[AgentEvent]) -> (Vec<UiItem>, HashMap<i64, usize>) 
                         kind: None,
                         status: None,
                         locations: None,
+                        seq: None,
                         resources: Vec::new(),
                     });
                 }
@@ -1939,6 +2017,7 @@ fn usage_item(
         kind: None,
         status: None,
         locations: None,
+        seq: None,
         resources: Vec::new(),
     }
 }
@@ -2190,10 +2269,15 @@ struct Settings {
     /// Maximum LLM/tool iterations in one agent turn.
     #[serde(default = "default_max_iter_setting")]
     max_iter: i64,
-    /// Compact long native-model conversations automatically at 80% of the
-    /// configured context budget. ACP agents own their remote context.
+    /// Compact long native-model conversations automatically once they reach
+    /// `auto_compact_percent` of the context budget. ACP agents own their
+    /// remote context.
     #[serde(default = "default_auto_compact")]
     auto_compact: bool,
+    /// Share of the context budget that triggers the warning and automatic
+    /// compaction. Clamped to `AUTO_COMPACT_PERCENT_RANGE`.
+    #[serde(default = "default_auto_compact_percent")]
+    auto_compact_percent: u64,
     /// After a user switches the session model, run semantic compaction.
     #[serde(default)]
     semantic_compact_on_model_switch: bool,
@@ -2208,6 +2292,9 @@ struct Settings {
     /// Generate three suggested next questions after a completed turn.
     #[serde(default = "default_follow_up_questions")]
     follow_up_questions: bool,
+    /// Show a usage tip on the empty conversation screen.
+    #[serde(default = "default_show_tips")]
+    show_tips: bool,
     /// Restore the most recent conversation when a workspace opens.
     #[serde(default = "default_resume_last_session")]
     resume_last_session: bool,
@@ -2256,6 +2343,12 @@ struct Settings {
     /// Desktop notifications for task done/failed/awaiting-approval (#327).
     #[serde(default = "default_notifications_enabled")]
     notifications_enabled: bool,
+    /// Sound cue for the same events, switched separately from the banner (#1595).
+    #[serde(default)]
+    notification_sound_enabled: bool,
+    /// Id from the platform sound catalog; empty means the platform default.
+    #[serde(default)]
+    notification_sound: String,
 }
 
 const DEFAULT_MAX_ITER: usize = 100;
@@ -2275,6 +2368,16 @@ const fn default_auto_compact() -> bool {
     true
 }
 
+const fn default_auto_compact_percent() -> u64 {
+    wisp_core::context::DEFAULT_AUTO_COMPACT_PERCENT as u64
+}
+
+/// Clamp a stored or submitted percent into the range the compactor accepts.
+fn clamp_auto_compact_percent(percent: u64) -> u8 {
+    let range = wisp_core::context::AUTO_COMPACT_PERCENT_RANGE;
+    percent.clamp(*range.start() as u64, *range.end() as u64) as u8
+}
+
 const fn default_semantic_compact_idle_hours() -> u64 {
     24
 }
@@ -2284,6 +2387,10 @@ const fn default_auto_continue_limit() -> u64 {
 }
 
 const fn default_follow_up_questions() -> bool {
+    true
+}
+
+const fn default_show_tips() -> bool {
     true
 }
 
@@ -2394,11 +2501,13 @@ fn apply_live_agent_settings(
     agent: &mut wisp_core::Agent,
     max_iter: usize,
     auto_compact: bool,
+    auto_compact_percent: u8,
     auto_continue: bool,
     auto_continue_limit: usize,
 ) {
     agent.max_iter = max_iter;
     agent.set_auto_compact(auto_compact);
+    agent.set_auto_compact_percent(auto_compact_percent);
     agent.set_auto_continue(auto_continue, auto_continue_limit);
 }
 
@@ -2579,6 +2688,52 @@ pub(crate) fn emit_to_session_surfaces_filtered<T: Clone + Serialize>(
     }
 }
 
+/// Keep the model's live state and the composer's notice in sync on both the
+/// legacy iframe and isolated Windows request paths. A clear is also valid
+/// after its runtime has been released; attaching requires a live runtime.
+pub(crate) fn apply_mcp_app_context_update(
+    runtime: Option<&SessionRuntime>,
+    instance_id: String,
+    app_name: String,
+    context: Option<McpAppContext>,
+) -> Result<AgentEvent, String> {
+    let frame_id = mcp_app_frame_id(&instance_id)?.to_string();
+    if context.is_some() && runtime.is_none() {
+        return Err("MCP App context requires a session runtime.".into());
+    }
+    let (update_mode, state, summary, structured_preview) = match context.as_ref() {
+        Some(context) => (
+            "replace",
+            "active",
+            context
+                .summary
+                .chars()
+                .take(MAX_MCP_APP_NOTICE_TEXT_BYTES)
+                .collect(),
+            context.structured_preview.as_ref().map(|value| {
+                value
+                    .chars()
+                    .take(MAX_MCP_APP_NOTICE_STRUCTURED_BYTES)
+                    .collect()
+            }),
+        ),
+        None => ("clear", "cleared", String::new(), None),
+    };
+    if let Some(runtime) = runtime {
+        runtime.set_mcp_app_context(instance_id.clone(), context);
+    }
+    Ok(AgentEvent::AppContextUpdate {
+        frame_id,
+        context_id: instance_id.clone(),
+        instance_id,
+        app_name,
+        update_mode: update_mode.into(),
+        state: state.into(),
+        summary,
+        structured_preview,
+    })
+}
+
 #[tauri::command]
 async fn update_mcp_app_context(
     app: AppHandle,
@@ -2590,26 +2745,9 @@ async fn update_mcp_app_context(
     let frame_id = mcp_app_frame_id(&instance_id)?.to_string();
     let context = normalize_mcp_app_context(&app_name, context)?;
     if context.is_none() {
-        if let Some(runtime) = state.sessions.lock().await.get(&frame_id).cloned() {
-            runtime.set_mcp_app_context(instance_id.clone(), None);
-        }
-        persist_and_emit_app_context_update(
-            state.inner(),
-            &app,
-            &frame_id,
-            None,
-            AgentEvent::AppContextUpdate {
-                frame_id: frame_id.clone(),
-                context_id: instance_id.clone(),
-                instance_id,
-                app_name,
-                update_mode: "clear".into(),
-                state: "cleared".into(),
-                summary: String::new(),
-                structured_preview: None,
-            },
-        )
-        .await;
+        let runtime = state.sessions.lock().await.get(&frame_id).cloned();
+        let event = apply_mcp_app_context_update(runtime.as_deref(), instance_id, app_name, None)?;
+        persist_and_emit_app_context_update(state.inner(), &app, &frame_id, None, event).await;
         return Ok(());
     }
     let project_id = state
@@ -2630,34 +2768,13 @@ async fn update_mcp_app_context(
     if runtime.deleted.load(Ordering::SeqCst) {
         return Err("MCP App session was deleted.".into());
     }
-    let context = context.expect("non-empty MCP App context");
-    let summary = context
-        .summary
-        .chars()
-        .take(MAX_MCP_APP_NOTICE_TEXT_BYTES)
-        .collect::<String>();
-    let structured_preview = context.structured_preview.as_ref().map(|value| {
-        value
-            .chars()
-            .take(MAX_MCP_APP_NOTICE_STRUCTURED_BYTES)
-            .collect::<String>()
-    });
-    runtime.set_mcp_app_context(instance_id.clone(), Some(context));
+    let event = apply_mcp_app_context_update(Some(&runtime), instance_id, app_name, context)?;
     persist_and_emit_app_context_update(
         state.inner(),
         &app,
         &frame_id,
         project_id.as_deref(),
-        AgentEvent::AppContextUpdate {
-            frame_id: frame_id.clone(),
-            context_id: instance_id.clone(),
-            instance_id,
-            app_name,
-            update_mode: "replace".into(),
-            state: "active".into(),
-            summary,
-            structured_preview,
-        },
+        event,
     )
     .await;
     Ok(())
@@ -3273,10 +3390,17 @@ struct TauriOutput {
     provenance_scope: String,
     /// Per-send_message id used to attribute real-browser tabs to this turn.
     turn_id: String,
-    /// IM turns force Ask unless the assistant's owner explicitly enables
-    /// its session Full Permission. Dispatched project turns still ask.
+    /// Remote turns default to Ask unless this conversation's own Full
+    /// Permission is enabled. A dispatch never inherits the parent's grant.
     force_ask_mutations: bool,
     agent_trace: wisp_core::AgentTrace,
+    /// A mandate's explicit review constraint remains authoritative even
+    /// when this conversation has Full Permission.
+    mandate_reviews_mutations: bool,
+    /// The turn was started by another lab member's mail: beyond asking
+    /// before changes, it may run unasked only what
+    /// `channels::lab_mail::UNATTENDED_TOOLS` names.
+    lab_turn: bool,
     /// Strategy label of the last compaction the agent loop reported during
     /// this turn (`auto` / `overflow`); read when the turn's context epoch is
     /// persisted.
@@ -3307,11 +3431,11 @@ impl TauriOutput {
             .unwrap_or(false)
     }
 
-    fn requires_im_approval(&self) -> bool {
+    fn requires_turn_approval(&self) -> bool {
         approval_commands::force_ask_for_turn(
             self.force_ask_mutations,
-            &self.frame_id,
             self.full_permission(),
+            self.mandate_reviews_mutations || self.lab_turn,
         )
     }
 
@@ -3343,7 +3467,7 @@ impl TauriOutput {
         allow_full_permission: bool,
     ) -> wisp_tools::ConfirmDecision {
         let _slot = workflow_approval::lock_frame(&self.frame_id).await;
-        if allow_full_permission && self.full_permission() && !self.requires_im_approval() {
+        if allow_full_permission && self.full_permission() && !self.requires_turn_approval() {
             return wisp_tools::ConfirmDecision::Approved;
         }
         let (tool, preview) = parse_confirm_payload(message);
@@ -3365,7 +3489,7 @@ impl TauriOutput {
             // Enabling Full Permission takes this same lock. Recheck while
             // registering so a concurrent `full` cannot miss a new request
             // and leave the running turn waiting despite its updated policy.
-            if allow_full_permission && self.full_permission() && !self.requires_im_approval() {
+            if allow_full_permission && self.full_permission() && !self.requires_turn_approval() {
                 return wisp_tools::ConfirmDecision::Approved;
             }
             confirms.insert(
@@ -3446,6 +3570,9 @@ fn emit_agent_event_to_surfaces_in(app: &AppHandle, event: AgentEvent, project_i
 }
 
 pub(crate) fn emit_agent_event_in(app: &AppHandle, event: AgentEvent, project_id: Option<&str>) {
+    if let Some(conversations) = app.try_state::<Arc<native_conversations::Conversations>>() {
+        conversations.observe(&event);
+    }
     app.state::<AppState>()
         .device_hub
         .apply_agent_event(&event, project_id);
@@ -3453,6 +3580,20 @@ pub(crate) fn emit_agent_event_in(app: &AppHandle, event: AgentEvent, project_id
 }
 
 fn should_persist_ui_event(event: &AgentEvent) -> bool {
+    if let AgentEvent::ToolPresentation {
+        presentation_kind,
+        payload,
+        ..
+    } = event
+    {
+        if presentation_kind == wisp_dto::SWARM_PRESENTATION {
+            return serde_json::from_value::<wisp_dto::SwarmProgress>(payload.clone()).is_ok_and(
+                |progress| {
+                    progress.phase == wisp_dto::SwarmPhase::Starting || progress.phase.terminal()
+                },
+            );
+        }
+    }
     matches!(
         event,
         AgentEvent::User { .. }
@@ -3528,6 +3669,15 @@ impl Output for TauriOutput {
         payload: &serde_json::Value,
         server: Option<std::sync::Arc<dyn wisp_tools::McpAppServer>>,
     ) {
+        if kind == wisp_dto::SWARM_PRESENTATION {
+            if let Ok(progress) = serde_json::from_value::<wisp_dto::SwarmProgress>(payload.clone())
+            {
+                self.app
+                    .state::<AppState>()
+                    .swarm_progress
+                    .update(&self.frame_id, progress);
+            }
+        }
         let mut payload = payload.clone();
         if let Some(object) = payload.as_object_mut() {
             object.remove("_wispMcpBinding");
@@ -3776,10 +3926,10 @@ impl Output for TauriOutput {
         })
     }
     fn approval_bypass(&self) -> bool {
-        self.full_permission() && !self.requires_im_approval()
+        self.full_permission() && !self.requires_turn_approval()
     }
     fn danger_auto_approve(&self) -> bool {
-        if self.requires_im_approval() {
+        if self.requires_turn_approval() {
             return false;
         }
         self.full_permission()
@@ -3790,7 +3940,11 @@ impl Output for TauriOutput {
                 .unwrap_or(false)
     }
     fn force_ask_mutations(&self) -> bool {
-        self.requires_im_approval()
+        self.requires_turn_approval()
+    }
+    fn unattended_tools(&self) -> Option<&'static [&'static str]> {
+        self.lab_turn
+            .then_some(channels::lab_mail::UNATTENDED_TOOLS)
     }
     fn plan_mode(&self) -> bool {
         self.plan_mode
@@ -3829,6 +3983,19 @@ impl Output for TauriOutput {
                 .position(|(guidance_id, _)| *guidance_id == id)
                 .map(|index| cutins.remove(index).1.id)
         };
+        if let Some(queue_id) = queue_id {
+            // The cut-in now runs inside this turn. Announce it on the queue
+            // lifecycle channel like a driver-run follow-up, so every surface
+            // drops its "waiting for the current step" row from this
+            // authoritative transition rather than only from the User event
+            // that follows through the coalescer.
+            crate::agent_turn::emit_queued_turn_state(
+                &self.app,
+                &self.frame_id,
+                queue_id,
+                "started",
+            );
+        }
         *self.queue_id.lock().unwrap() = queue_id;
         self.on_message(msg);
     }
@@ -4715,6 +4882,7 @@ fn skill_infos(
                 managed: false,
                 managed_by: None,
                 dir: s.dir.to_string_lossy().to_string(),
+                copies: skill_commands::skill_copies(skills.catalog_records(), &s.name),
             }
         })
         .collect()
@@ -5194,6 +5362,18 @@ async fn load_auto_compact_enabled(store: &Store) -> bool {
         .unwrap_or(true)
 }
 
+async fn load_auto_compact_percent(store: &Store) -> u8 {
+    clamp_auto_compact_percent(
+        store
+            .get_setting("auto_compact_percent")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default_auto_compact_percent()),
+    )
+}
+
 async fn load_semantic_compact_on_model_switch(store: &Store) -> bool {
     store
         .get_setting("semantic_compact_on_model_switch")
@@ -5248,36 +5428,58 @@ fn record_window_focus(label: &str, focused: bool) {
     }
 }
 
-fn app_has_focus() -> bool {
-    !focused_windows().lock().unwrap().is_empty()
+fn focused_window_labels() -> HashSet<String> {
+    focused_windows().lock().unwrap().clone()
 }
 
-/// Whether the user is looking at one of this app's windows.
+/// Labels of this app's windows the user is looking at right now.
 ///
 /// On Windows the WebView2 child HWND owns keyboard focus, so the top-level
 /// window reports `Focused(false)` right after every `Focused(true)` and the
 /// recorded set is empty while the user is actively using the app. The
 /// foreground window is the reliable signal there: it names exactly one
 /// top-level window no matter which child holds focus.
-fn app_is_foreground(app: &AppHandle) -> bool {
-    if app_has_focus() {
-        return true;
-    }
+fn foreground_window_labels(app: &AppHandle) -> HashSet<String> {
+    let mut labels = focused_window_labels();
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
         let foreground = unsafe { GetForegroundWindow() }.0 as usize;
         if foreground != 0 {
-            return app.workspace_surfaces().values().any(|window| {
-                window
-                    .hwnd()
-                    .is_ok_and(|hwnd| hwnd.0 as usize == foreground)
-            });
+            labels.extend(
+                app.workspace_surfaces()
+                    .into_iter()
+                    .filter(|(_, window)| {
+                        window
+                            .hwnd()
+                            .is_ok_and(|hwnd| hwnd.0 as usize == foreground)
+                    })
+                    .map(|(label, _)| label),
+            );
         }
     }
     #[cfg(not(target_os = "windows"))]
     let _ = app;
-    false
+    labels
+}
+
+/// Whether the user is looking at this conversation: one of the foreground
+/// windows is currently viewing it (#1619).
+///
+/// Desktop notifications are suppressed on this, not on "any app window is in
+/// front". A conversation finishing in a background window, or behind another
+/// conversation of the same project, is not being watched, so it still gets its
+/// banner and sound cue; only the exact session on screen is silent.
+fn session_in_foreground(
+    foreground_labels: &HashSet<String>,
+    frame_id: &str,
+    active_frames: &HashMap<String, String>,
+) -> bool {
+    foreground_labels.iter().any(|label| {
+        active_frames
+            .get(label)
+            .is_some_and(|viewed| viewed == frame_id)
+    })
 }
 
 /// The `open-session` payload a window's most recent desktop notification was
@@ -5334,6 +5536,7 @@ fn memory_file_path(memory: &MemoryManager, name: &str) -> Result<std::path::Pat
 /// carry their own command/env/cwd (unrelated to the bundled Python venv).
 /// Header/env values are hydrated from the keyring here and never written back.
 async fn connect_mcp(conn: &McpConnection) -> anyhow::Result<wisp_mcp::McpClient> {
+    let proxy = network::mcp_proxy_for(&conn.proxy_url);
     match &conn.transport {
         McpTransport::Stdio {
             command, args, cwd, ..
@@ -5349,7 +5552,7 @@ async fn connect_mcp(conn: &McpConnection) -> anyhow::Result<wisp_mcp::McpClient
                     cmd.current_dir(dir);
                 }
             }
-            cmd.envs(wisp_tools::network::proxy_env(&network::mcp_proxy()));
+            cmd.envs(wisp_tools::network::proxy_env(&proxy));
             wisp_tools::process::hide_console_async(&mut cmd);
             wisp_mcp::McpClient::launch_with_command(cmd).await
         }
@@ -5357,14 +5560,9 @@ async fn connect_mcp(conn: &McpConnection) -> anyhow::Result<wisp_mcp::McpClient
             let headers = mcp_secrets::hydrate_headers(conn);
             match auth {
                 McpHttpAuth::None => {
-                    wisp_mcp::McpClient::connect_http_with_proxy(
-                        url,
-                        &headers,
-                        &network::mcp_proxy(),
-                    )
-                    .await
+                    wisp_mcp::McpClient::connect_http_with_proxy(url, &headers, &proxy).await
                 }
-                McpHttpAuth::OAuth => mcp_oauth::connect(&conn.id, url, &headers).await,
+                McpHttpAuth::OAuth => mcp_oauth::connect(&conn.id, url, &headers, &proxy).await,
             }
         }
     }
@@ -5384,7 +5582,8 @@ fn default_api_url(provider: &str) -> &'static str {
 fn default_model(provider: &str) -> &'static str {
     match normalized_provider(provider).as_str() {
         "anthropic" => "claude-sonnet-5",
-        "openai_responses" | "openai_codex" => "gpt-5.5",
+        "openai_responses" => "gpt-5.5",
+        "openai_codex" => wisp_llm::codex_auth::DEFAULT_MODEL,
         "openai_chatgpt" => wisp_llm::chatgpt_auth::DEFAULT_MODEL,
         "xai_oauth" => wisp_llm::xai_auth::DEFAULT_MODEL,
         _ => "deepseek-v4-flash",
@@ -5394,14 +5593,15 @@ fn default_model(provider: &str) -> &'static str {
 /// Process-wide LLM proxy override, mirroring NetworkSettings.model_proxy_url. A
 /// global (like the env vars it replaces) so every provider construction site
 /// picks it up without threading store access through each caller. Loaded at
-/// startup, updated on settings save.
+/// startup, updated on settings save. Endpoint and subscription routes layer
+/// over it in `network::model_proxy`.
 static LLM_PROXY: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
 pub(crate) fn set_llm_proxy(value: &str) {
     *LLM_PROXY.write().unwrap() = value.trim().to_string();
 }
 
-fn llm_proxy() -> Option<String> {
+pub(crate) fn llm_proxy() -> Option<String> {
     let v = LLM_PROXY.read().unwrap();
     (!v.is_empty()).then(|| v.clone())
 }
@@ -5468,7 +5668,7 @@ fn build_provider_config(
     cfg.send_session_id = send_session_id;
     cfg.session_header_name =
         wisp_llm::provider::normalize_session_header_name(session_header_name)?;
-    cfg.proxy = llm_proxy();
+    cfg.proxy = network::model_proxy(&provider, api_url);
     if let Some(session_id) = session_id {
         cfg.session_id = session_id.to_string();
     }
@@ -5610,7 +5810,10 @@ fn skill_sources(root: &std::path::Path) -> Vec<(PathBuf, SkillSource)> {
     if let Some(b) = wisp_skills::bundled_dir() {
         paths.push((b, SkillSource::Bundled));
     }
-    paths.push((root.join(".wisp").join("skills"), SkillSource::Project));
+    paths.push((
+        skill_commands::project_skills_dir(root),
+        SkillSource::Project,
+    ));
     if let Some(home) = dirs::home_dir() {
         paths.push((home.join(".wisp").join("skills"), SkillSource::Global));
     }
@@ -5870,6 +6073,7 @@ async fn finish_custom_mcp_wiring(
             .push(error.message.clone());
         result.errors.push(error.message);
     }
+    let decision = decision_model::configured(store).await;
     let mut set = tokio::task::JoinSet::new();
     for (index, spec) in specs.into_iter().enumerate() {
         if connector_allow.is_some_and(|allow| !allow.contains(spec.id())) {
@@ -5918,7 +6122,9 @@ async fn finish_custom_mcp_wiring(
                     client,
                     &connector_id,
                     &authorization_revision,
+                    &name,
                     require_approval,
+                    decision.clone(),
                 )
                 .await
                 {
@@ -5962,7 +6168,9 @@ async fn register_mcp_with_approval(
     client: std::sync::Arc<wisp_mcp::McpClient>,
     connector_id: &str,
     authorization_revision: &str,
+    connector_name: &str,
     require_approval: bool,
+    decision: Option<wisp_llm::systemone::DecisionModel>,
 ) -> Result<RegisteredMcpTools, String> {
     if connector_id.trim().is_empty() {
         tracing::warn!(
@@ -6002,17 +6210,27 @@ async fn register_mcp_with_approval(
             } else {
                 None
             };
-            let collisions: Vec<_> = tools
-                .iter()
-                .filter(|tool| {
-                    tool.visible_to_model()
-                        && depmap_contract.as_ref().is_none_or(|contract| {
-                            depmap_agent::depmap_tool_enabled_for_contract(contract, &tool.name)
-                        })
-                        && registry.get(&tool.name).is_some()
-                })
-                .map(|tool| tool.name.clone())
-                .collect();
+            let prefix = mcp_bridge::sanitize_tool_part(connector_name);
+            let taken = |names: &[String], name: &str| {
+                registry.get(name).is_some() || names.iter().any(|n| n == name)
+            };
+            let mut names = Vec::new();
+            let mut collisions = Vec::new();
+            for tool in tools.iter().filter(|tool| {
+                tool.visible_to_model()
+                    && depmap_contract.as_ref().is_none_or(|contract| {
+                        depmap_agent::depmap_tool_enabled_for_contract(contract, &tool.name)
+                    })
+            }) {
+                let alias = format!("{prefix}__{}", tool.name);
+                if !taken(&names, &tool.name) {
+                    names.push(tool.name.clone());
+                } else if !taken(&names, &alias) {
+                    names.push(alias);
+                } else {
+                    collisions.push(tool.name.clone());
+                }
+            }
             if !collisions.is_empty() {
                 return Err(format!("tool name collision: {}", collisions.join(", ")));
             }
@@ -6020,16 +6238,13 @@ async fn register_mcp_with_approval(
             // checked below when adding tools to the agent registry.
             client.mark_catalog_current();
             let catalog = std::sync::Arc::new(tools);
-            let mut names = Vec::new();
-            for t in catalog.iter() {
-                if !t.visible_to_model()
-                    || depmap_contract.as_ref().is_some_and(|contract| {
-                        !depmap_agent::depmap_tool_enabled_for_contract(contract, &t.name)
+            let visible = catalog.iter().filter(|t| {
+                t.visible_to_model()
+                    && depmap_contract.as_ref().is_none_or(|contract| {
+                        depmap_agent::depmap_tool_enabled_for_contract(contract, &t.name)
                     })
-                {
-                    continue;
-                }
-                names.push(t.name.clone());
+            });
+            for (t, name) in visible.zip(&names) {
                 let tool = if require_approval {
                     wisp_mcp::McpTool::with_catalog_authorized_requiring_approval(
                         t.clone(),
@@ -6047,16 +6262,15 @@ async fn register_mcp_with_approval(
                         std::sync::Arc::clone(&catalog),
                     )
                 };
-                registry.add(Box::new(tool));
+                registry.add(Box::new(tool.renamed(name.as_str())));
             }
-            // With a TypeSafe key, a Cua Driver connection also gets the
-            // Jev-driven autopilot; without one the agent drives Cua Driver.
+            // With a decision model, a Cua Driver connection also gets the
+            // System One autopilot; without one the agent drives Cua Driver.
             if registry.get(wisp_mcp::desktop_autopilot::NAME).is_none() {
                 if let Some(tool) = wisp_mcp::desktop_autopilot::DesktopAutopilot::for_catalog(
                     &catalog,
                     client.clone(),
-                    &models::typesafe_api_key(),
-                    llm_proxy(),
+                    decision,
                     require_approval,
                 ) {
                     names.push(wisp_mcp::desktop_autopilot::NAME.into());
@@ -6311,6 +6525,7 @@ async fn resolve_composer_references(
     Ok(injections)
 }
 
+#[cfg(test)]
 async fn resolve_reader_references(
     store: &Store,
     refs: &[ComposerReferenceArg],
@@ -6670,7 +6885,10 @@ async fn review_session(
 fn parse_follow_up_questions(raw: &str) -> Result<Vec<String>, String> {
     let start = raw.find('[').ok_or("Model did not return a JSON array.")?;
     let end = raw.rfind(']').ok_or("Model did not return a JSON array.")?;
-    let values: Vec<String> = serde_json::from_str(&raw[start..=end])
+    let body = raw
+        .get(start..=end)
+        .ok_or("Model did not return a JSON array.")?;
+    let values: Vec<String> = serde_json::from_str(body)
         .map_err(|error| format!("Invalid follow-up question response: {error}"))?;
     let mut questions = Vec::with_capacity(3);
     for value in values {
@@ -6773,6 +6991,7 @@ async fn side_chat(
     session_id: Option<String>,
     question: String,
     acp_agent_id: Option<String>,
+    run_id: Option<String>,
 ) -> Result<side_chat::SideChatResponse, String> {
     let question = question.trim();
     if question.is_empty() {
@@ -6818,10 +7037,37 @@ async fn side_chat(
         snapshot_version = messages.last().map(|(seq, _)| *seq).unwrap_or_default();
         history = side_chat::history_from_messages(&messages);
     }
+    // Asked from a Run card: read that Run's live record instead of relying
+    // on what the conversation log happens to say about it.
+    let run = match run_id.as_deref().filter(|id| !id.is_empty()) {
+        Some(run_id) => {
+            let (_, scope) =
+                exploration_commands::working_project_for_frame(&state, frame_id).await?;
+            if !state
+                .store
+                .run_visible_in_scope(run_id, &scope)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                return Err("Run is not visible in the active state scope".into());
+            }
+            Some(
+                state
+                    .store
+                    .get_run(run_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "Run not found".to_string())?,
+            )
+        }
+        None => None,
+    };
     let http_llm = side_chat_http_provider(&state, frame_id).await;
-    let intent = match &http_llm {
-        Ok(llm) => side_chat::classify_intent(llm.as_ref(), question).await,
-        Err(error) => {
+    let intent = match (&run, &http_llm) {
+        // The card already fixed the scope; no classifier call is needed.
+        (Some(_), _) => side_chat::SideChatIntent::run(),
+        (None, Ok(llm)) => side_chat::classify_intent(llm.as_ref(), question).await,
+        (None, Err(error)) => {
             if acp_agent_id.as_deref().is_some_and(|id| !id.is_empty()) {
                 side_chat::SideChatIntent::session_fallback(question)
             } else {
@@ -6829,7 +7075,19 @@ async fn side_chat(
             }
         }
     };
-    let evidence = side_chat::retrieve_evidence(question, &history, &intent);
+    let mut evidence = side_chat::retrieve_evidence(question, &history, &intent);
+    if let Some(run) = &run {
+        evidence.push(side_chat::run_evidence(run, chrono::Utc::now().timestamp()));
+        // The Run lives on a server: look there too, over its own connection,
+        // so the answer covers what the outputs look like on that machine.
+        if run.kind == "ssh_direct" && run.cleaned_at.is_none() {
+            let report = state
+                .run_manager
+                .inspect_run_server(&state.store, run)
+                .await;
+            evidence.push(side_chat::run_server_evidence(&run.id, report));
+        }
+    }
     if evidence.is_empty() {
         return Ok(side_chat::SideChatResponse {
             answer: String::new(),
@@ -7190,14 +7448,15 @@ impl StartupTimeline {
     }
 }
 
-/// Windows release builds have no console, so tracing output went to a sink and
-/// a launch problem on a user machine left nothing to read. Keep the latest
-/// launch in a log file next to the database instead.
-#[cfg(all(not(debug_assertions), target_os = "windows"))]
+/// Windows release builds have no console, and a macOS app launched from the
+/// Finder has no terminal either, so tracing output left nothing to read when a
+/// user machine misbehaved. Keep the latest launch in a log file next to the
+/// database instead (`wisp.previous.log` holds the launch before it).
+#[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 #[derive(Clone)]
 struct SharedLogFile(Arc<StdMutex<std::fs::File>>);
 
-#[cfg(all(not(debug_assertions), target_os = "windows"))]
+#[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 impl SharedLogFile {
     fn create() -> Option<Self> {
         let dir = dirs::data_dir()?
@@ -7215,7 +7474,7 @@ impl SharedLogFile {
     }
 }
 
-#[cfg(all(not(debug_assertions), target_os = "windows"))]
+#[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 impl std::io::Write for SharedLogFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut file = self
@@ -7354,7 +7613,7 @@ pub fn run() {
     let filter = tracing_subscriber::EnvFilter::from_default_env()
         .add_directive("wisp=info".parse().unwrap());
     let subscriber = tracing_subscriber::fmt().with_env_filter(filter);
-    #[cfg(all(not(debug_assertions), target_os = "windows"))]
+    #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
     match SharedLogFile::create() {
         Some(log) => subscriber
             .with_ansi(false)
@@ -7362,7 +7621,7 @@ pub fn run() {
             .init(),
         None => subscriber.with_writer(std::io::sink).init(),
     }
-    #[cfg(not(all(not(debug_assertions), target_os = "windows")))]
+    #[cfg(not(all(not(debug_assertions), any(target_os = "windows", target_os = "macos"))))]
     subscriber.init();
 
     #[cfg(target_os = "macos")]
@@ -7370,8 +7629,12 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let macos_exit_for_setup = Arc::clone(&macos_exit_in_progress);
 
-    tauri::Builder::default()
-        .manage(mcp_app_children::McpAppChildren::default())
+    let builder = tauri::Builder::default().manage(mcp_app_children::McpAppChildren::default());
+    #[cfg(target_os = "macos")]
+    let builder = builder.manage(native_host_lifecycle::NativeHostLifecycle::new(
+        native_settings::requested(std::env::args()),
+    ));
+    builder
         // Keep this first so a repeated launch is intercepted before other plugins
         // and application state are initialized in a second process.
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -7553,8 +7816,9 @@ pub fn run() {
             );
             let root = ensure_writable(root, &app_data);
 
-            network::apply(&tauri::async_runtime::block_on(network::load(&store))
-                .unwrap_or_default());
+            if let Err(error) = tauri::async_runtime::block_on(network::restore(&store)) {
+                tracing::warn!(target: "wisp", %error, "network settings could not be restored");
+            }
 
             let skills = Arc::new(startup.record("skills", || load_skill_index(&root)));
             let memory = Arc::new(MemoryManager::new(&root));
@@ -7582,6 +7846,8 @@ pub fn run() {
             });
             let (needs_human_tx, mut needs_human_rx) = tokio::sync::mpsc::unbounded_channel();
             tauri::async_runtime::block_on(browser_bridge.set_needs_human_sink(needs_human_tx));
+            let (side_panel_tx, side_panel_rx) = tokio::sync::mpsc::unbounded_channel();
+            tauri::async_runtime::block_on(browser_bridge.set_side_panel_sink(side_panel_tx));
             let device_hub = Arc::new(device_hub::DeviceHub::default());
             let device_bridge = Arc::new(device_bridge::DeviceBridge::new(
                 device_hub.clone(),
@@ -7624,8 +7890,11 @@ pub fn run() {
                 full_permission_sessions,
                 bootstrap,
                 plugin_runtime_errors: StdMutex::new(HashMap::new()),
+                swarm_progress: swarm_progress::SwarmCache::default(),
+                swarm_retries: StdMutex::new(HashSet::new()),
                 reviewing: Arc::new(StdMutex::new(HashSet::new())),
                 after_turn_generations: StdMutex::new(HashMap::new()),
+                branch_intents: Arc::new(branch_tool::BranchIntentRegistry::default()),
                 assistant_windows: std::sync::RwLock::new(HashMap::new()),
             };
             app.manage(state);
@@ -7638,10 +7907,15 @@ pub fn run() {
                     }
                 });
             }
+            tauri::async_runtime::spawn(browser_bridge::side_panel::serve(
+                app.handle().clone(),
+                side_panel_rx,
+            ));
             app.manage(app_updates::PendingAppUpdate::default());
             app.manage(terminal_sessions::TerminalManager::new());
             app.manage(channels::ChannelManager::new());
             delegation_completion::start_dispatcher(app.handle());
+            run_background::resume_pending(app.handle());
             scheduler::start_scheduler(app.handle());
             project_sync::start_folder_publisher(app.handle());
             {
@@ -7697,6 +7971,8 @@ pub fn run() {
             if native_settings::requested(std::env::args()) {
                 native_settings::start(app.handle()).map_err(std::io::Error::other)?;
             }
+            #[cfg(target_os = "macos")]
+            native_host_lifecycle::watch_owner(app.handle());
             startup.finish();
             Ok(())
         })
@@ -7744,6 +8020,18 @@ pub fn run() {
             channels::channels_status,
             channels::assistant_weixin_status,
             channels::set_feishu_channel,
+            channels::remote::set_remote_access,
+            channels::remote::reset_remote_access_code,
+            channels::lab::lab_status,
+            channels::lab::lab_join,
+            channels::lab::lab_set_relay_token,
+            channels::lab::lab_leave,
+            channels::lab::lab_set_inbox_project,
+            channels::lab::lab_create_invite,
+            channels::lab::lab_approve_member,
+            channels::lab::lab_remove_member,
+            channels::lab::lab_publish_knowledge_base,
+            channels::lab::lab_join_knowledge_base,
             channels::feishu_bind_start,
             channels::feishu_bind_poll,
             channels::feishu_bind_cancel,
@@ -7772,19 +8060,32 @@ pub fn run() {
             acp::set_acp_session_mode,
             test_reviewer_backend,
             delegation_runtime::list_agent_workflows,
-            delegation_runtime::get_session_delegation_enabled,
-            delegation_runtime::set_session_delegation_enabled,
+            subagent_activity::list_subagent_activity,
+            swarm_progress::get_swarm_progress,
+            swarm_progress::retry_swarm_tasks,
             plan_mode::get_session_plan_mode,
             plan_mode::set_session_plan_mode,
-            delegation_completion::get_session_agent_completion,
-            delegation_completion::set_session_agent_completion,
             scheduler::create_schedule,
+            scheduler::set_session_timer,
             scheduler::list_schedules,
             scheduler::list_schedule_runs,
             scheduler::set_schedule_enabled,
             scheduler::delete_schedule,
             scheduler::run_schedule_now,
             scheduler::list_all_schedules,
+            mandates::list_all_mandates,
+            mandates::create_mandate,
+            mandates::update_mandate,
+            mandates::set_mandate_status,
+            mandates::delete_mandate,
+            mandates::run_mandate_now,
+            mandates::reply_to_mandate,
+            mandate_report::report_mandate_now,
+            memory_tidy::get_memory_tidy_automation,
+            memory_tidy::set_memory_tidy_automation,
+            memory_tidy::run_memory_tidy_now,
+            memory_tidy::apply_memory_tidy_proposal,
+            memory_tidy::dismiss_memory_tidy_proposal,
             research_recap::get_daily_recap_automation,
             research_recap::set_daily_recap_automation,
             research_recap::run_daily_recap_now,
@@ -7839,6 +8140,9 @@ pub fn run() {
             session_commands::branch_session,
             session_commands::preview_session_branch_merge,
             session_commands::summarize_session_branch_merge,
+            session_commands::generate_session_handoff,
+            session_commands::render_session_excerpt,
+            session_commands::generate_session_experience,
             session_commands::merge_session_branch_summary,
             exploration_commands::start_exploration,
             exploration_commands::list_project_explorations,
@@ -7862,6 +8166,7 @@ pub fn run() {
             runtime_commands::list_runs,
             runtime_commands::get_run_detail,
             runtime_commands::cancel_run,
+            run_background::background_run,
             runtime_commands::harvest_run,
             runtime_commands::cleanup_run_workspace,
             runtime_commands::list_run_workspace_files,
@@ -7881,9 +8186,15 @@ pub fn run() {
             project_commands::get_research_calendar,
             project_commands::add_research_journal_entry,
             project_commands::get_research_journey_source,
+            project_commands::list_project_memos,
+            project_commands::add_project_memo,
+            project_commands::update_project_memo,
+            project_commands::delete_project_memo,
             research_recap::generate_research_recap,
             research_recap::update_research_recap,
             session_commands::delete_session,
+            session_commands::preview_session_children,
+            session_commands::preview_session_family_artifacts,
             session_commands::preview_session_artifacts,
             session_commands::rename_session,
             session_commands::set_session_pinned,
@@ -7892,6 +8203,7 @@ pub fn run() {
             session_commands::list_folders,
             session_commands::create_folder,
             session_commands::rename_folder,
+            session_commands::reorder_folders,
             session_commands::delete_folder,
             session_commands::move_session,
             session_commands::list_recent_sessions,
@@ -7970,7 +8282,11 @@ pub fn run() {
             skill_commands::set_skills_enabled,
             skill_commands::set_skill_enabled,
             skill_commands::pick_skill_source,
+            skill_commands::skill_install_locations,
             skill_commands::install_skill,
+            skill_commands::promote_skill_to_global,
+            skill_commands::remove_project_skill_copy,
+            skill_commands::list_project_skill_packages,
             skill_commands::remove_skill,
             plugins::list_plugins,
             plugins::pick_plugin_source,
@@ -8001,6 +8317,12 @@ pub fn run() {
             browser_bridge::focus_browser_needs_human,
             network::get_network_settings,
             network::set_network_settings,
+            network::get_subscription_proxies,
+            network::set_subscription_proxy,
+            decision_model::get_decision_model,
+            decision_model::save_decision_model,
+            decision_model::clear_decision_model_key,
+            decision_model::test_decision_model,
             settings_commands::get_settings,
             privacy_mode::get_privacy_mode,
             privacy_mode::set_privacy_mode,
@@ -8046,6 +8368,7 @@ pub fn run() {
             settings_commands::validate_settings,
             list_dir,
             create_file,
+            file_browser::upload_local_files,
             create_directory,
             rename_entry,
             delete_entry,
@@ -8060,6 +8383,9 @@ pub fn run() {
             artifact_commands::list_artifacts,
             artifact_commands::search_artifacts,
             session_commands::search_sessions,
+            session_commands::list_needs_you_sessions,
+            session_commands::search_project_chats,
+            session_commands::locate_project_chat_match,
             artifact_commands::read_artifact,
             artifact_commands::read_artifact_bytes,
             artifact_commands::download_artifact,
@@ -8102,6 +8428,8 @@ pub fn run() {
             settings_commands::get_update_check_enabled,
             settings_commands::set_update_check_enabled,
             app_commands::notify_user,
+            notification_sound::list_notification_sounds,
+            notification_sound::preview_notification_sound,
             memory_commands::read_memory_file,
             memory_commands::write_memory_file,
             memory_commands::delete_memory_file,
@@ -8141,6 +8469,10 @@ pub fn run() {
             specialists::remove_specialist,
             specialists::set_session_specialist,
             specialists::get_session_specialist,
+            specialist_package::export_specialist,
+            specialist_package::pick_specialist_package,
+            specialist_package::preview_specialist_import,
+            specialist_package::import_specialist,
         ];
             handler(invoke)
         })
@@ -8179,6 +8511,8 @@ pub fn run() {
                 tracing::info!(target: "wisp", step="stop-device-bridge", "app.exit.step");
                 let device_bridge = _app.state::<AppState>().device_bridge.clone();
                 tauri::async_runtime::block_on(device_bridge.stop());
+                tracing::info!(target: "wisp", step="shutdown-acp-agents", "app.exit.step");
+                tauri::async_runtime::block_on(acp::shutdown_all(_app.state::<AppState>().inner()));
                 tracing::info!(target: "wisp", step="shutdown-runtimes", "app.exit.step");
                 let runtime_manager = _app.state::<AppState>().runtime_manager.clone();
                 tauri::async_runtime::block_on(runtime_manager.shutdown_all());

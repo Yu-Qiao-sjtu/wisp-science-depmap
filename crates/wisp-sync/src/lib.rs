@@ -1,20 +1,35 @@
-//! End-to-end encrypted, manual snapshot sync for Wisp projects.
+//! End-to-end encrypted, manual snapshot sync for Wisp projects, plus the
+//! remote web access rendezvous and the optional Wisp Lab membership layer.
 //!
 //! The relay only stores opaque content-addressed blobs and immutable revision
-//! descriptors. Project keys never leave clients.
+//! descriptors, and only forwards opaque remote frames. Project keys, remote
+//! access codes and lab keys never leave clients.
 
 mod crypto;
+mod direct;
 mod http;
+mod lab;
 mod protocol;
 mod relay;
+mod remote;
 
 pub use crypto::{
     decrypt_blob, encrypt_blob, random_project_key, sha256_hex, sign_revision, verify_revision,
     PROJECT_KEY_BYTES,
 };
+pub use direct::{direct_remote_router, DirectRemoteHost};
 pub use http::{relay_router, HttpRelay, RelayHttpState, MAX_RELAY_BODY_BYTES};
+pub use lab::{
+    lab_mail_aad, Lab, LabInvite, LabJoinRequest, LabKnowledgeBase, LabMail, LabMember,
+    LabMemberStatus, LabRejection, LabRole, LabView, LAB_KB_AAD, LAB_MEMBER_HEADER,
+    MAX_LAB_MAIL_BYTES,
+};
 pub use protocol::{
     CommitOutcome, CommitRequest, SyncHead, SyncRevision, WorkspaceFile, WorkspaceManifest,
     SYNC_PROTOCOL_VERSION,
 };
 pub use relay::{FileRelay, SyncTransport};
+pub use remote::{
+    open_frame, relay_base, remote_endpoints, remote_relay_base, seal_frame, HostFrame, RemoteCode,
+    CLIENT_TO_HOST, HOST_OFFLINE_CLOSE, HOST_TO_CLIENT, REMOTE_HOST_MAX_FRAME_BYTES,
+};

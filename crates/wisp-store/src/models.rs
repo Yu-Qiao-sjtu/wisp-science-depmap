@@ -926,6 +926,18 @@ pub struct SessionSearchResult {
     pub last_role: Option<String>,
     /// Activity newer than the last time the user viewed the session.
     pub unseen: bool,
+    /// Shelved (archived) out of everyday navigation; only keyword searches
+    /// that opt in via [`SessionSearchOptions::include_shelved`] return it.
+    pub shelved: bool,
+}
+
+/// Widens the default discovery scope of a session search.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionSearchOptions {
+    /// Also match shelved sessions when the query is non-empty. The empty
+    /// "recent sessions" list never includes them, so a shelved conversation
+    /// stays out of everyday navigation but can still be found by name.
+    pub include_shelved: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1103,6 +1115,9 @@ pub struct RunSummary {
     pub harvested_at: Option<i64>,
     pub cleaned_at: Option<i64>,
     pub cleanup_error: Option<String>,
+    /// When the user moved this Run to the background. NULL means a turn may
+    /// still wait on it and no completion notice is due.
+    pub background_requested_at: Option<i64>,
     /// Bounded head/tail sample plus byte lengths; changes make visible run
     /// monitors refetch the one full record they display.
     pub output_fingerprint: String,
@@ -1458,6 +1473,7 @@ pub(crate) fn run_summary_from_row(row: SqliteRow) -> Result<RunSummary> {
         harvested_at: row.try_get("harvested_at")?,
         cleaned_at: row.try_get("cleaned_at")?,
         cleanup_error: row.try_get("cleanup_error")?,
+        background_requested_at: row.try_get("background_requested_at")?,
         output_fingerprint: row.try_get("output_fingerprint")?,
     })
 }

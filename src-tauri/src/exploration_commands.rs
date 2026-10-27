@@ -1048,6 +1048,12 @@ pub(crate) async fn start_exploration(
         .await?;
     let exploration = service.create_exploration(&checkpoint.id, &name).await?;
     let (project, _) = working_project_for_frame(&state, &exploration.frame_id).await?;
+    crate::approval_commands::copy_session_permissions(
+        &state.approval_grants,
+        &state.full_permission_sessions,
+        &source_frame_id,
+        &exploration.frame_id,
+    )?;
     state.set_active(window.label(), project);
     state.set_active_frame(window.label(), Some(exploration.frame_id.clone()));
     Ok(exploration)
@@ -1094,6 +1100,22 @@ pub(crate) async fn abandon_exploration_round(
     window: WorkspaceSurface,
     source_frame_id: String,
 ) -> Result<(), String> {
+    let project_id = abandon_round(&state, &terminals, &source_frame_id).await?;
+    let (project, _, _) = crate::project_commands::load_active_project(&state, &project_id).await?;
+    state.set_active(window.label(), project);
+    state.set_active_frame(window.label(), Some(source_frame_id));
+    Ok(())
+}
+
+/// Abandon the current round owned by `source_frame_id` and return its
+/// project. Also used when that mainline is deleted together with its
+/// explorations.
+pub(crate) async fn abandon_round(
+    state: &AppState,
+    terminals: &crate::terminal_sessions::TerminalManager,
+    source_frame_id: &str,
+) -> Result<String, String> {
+    let source_frame_id = source_frame_id.to_string();
     let owner = state
         .store
         .frame_state_scope(&source_frame_id)
@@ -1161,7 +1183,7 @@ pub(crate) async fn abandon_exploration_round(
         ));
     }
     crate::exploration_promotion::ensure_no_queued_turns(
-        state.inner(),
+        state,
         std::iter::once(&source_frame_id)
             .chain(candidates.iter().map(|candidate| &candidate.frame_id)),
     )
@@ -1231,10 +1253,7 @@ pub(crate) async fn abandon_exploration_round(
     )
     .dispose_resolved_round_workspaces(&candidates, &snapshots, &context_archives)
     .await;
-    let (project, _, _) = crate::project_commands::load_active_project(&state, &project_id).await?;
-    state.set_active(window.label(), project);
-    state.set_active_frame(window.label(), Some(source_frame_id));
-    Ok(())
+    Ok(project_id)
 }
 
 #[cfg(test)]
@@ -1296,6 +1315,81 @@ mod tests {
             .await
             .unwrap();
         (ExplorationService::new(store, app_data), base, project)
+    }
+
+    #[tokio::test]
+    async fn exploration_inherits_default_environment_and_all_enabled_servers() {
+        for default in [Some("ssh:gpu"), Some("wsl:Ubuntu"), Some("local"), None] {
+            let (service, base, _) = fixture("inherited_environment").await;
+            for context_id in ["ssh:gpu", "ssh:global", "wsl:Ubuntu"] {
+                service
+                    .store
+                    .upsert_execution_context(
+                        &wisp_store::ExecutionContext::new(context_id, context_id).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            for context_id in ["ssh:gpu", "wsl:Ubuntu"] {
+                service
+                    .store
+                    .set_session_execution_context_enabled("main", context_id, true)
+                    .await
+                    .unwrap();
+            }
+            service
+                .store
+                .set_setting(
+                    crate::ssh_hosts::DEFAULT_EXECUTION_CONTEXT_KEY,
+                    "ssh:global",
+                )
+                .await
+                .unwrap();
+            service
+                .store
+                .set_session_default_execution_context("main", default)
+                .await
+                .unwrap();
+            let checkpoint = service
+                .create_checkpoint_at("p", "main", Some(0))
+                .await
+                .unwrap();
+            let exploration = service
+                .create_exploration(&checkpoint.id, "Inherited environment")
+                .await
+                .unwrap();
+            assert_eq!(
+                service
+                    .store
+                    .session_default_execution_context(&exploration.frame_id)
+                    .await
+                    .unwrap(),
+                default.map(str::to_string)
+            );
+            assert_eq!(
+                service
+                    .store
+                    .list_session_execution_context_ids(&exploration.frame_id)
+                    .await
+                    .unwrap(),
+                vec!["ssh:gpu", "wsl:Ubuntu"]
+            );
+            service
+                .store
+                .set_session_execution_context_enabled(&exploration.frame_id, "ssh:gpu", false)
+                .await
+                .unwrap();
+            assert_eq!(
+                service
+                    .store
+                    .list_session_execution_context_ids("main")
+                    .await
+                    .unwrap(),
+                vec!["ssh:gpu", "wsl:Ubuntu"]
+            );
+            drop(service);
+            let _ = std::fs::remove_dir_all(base);
+        }
     }
 
     #[tokio::test]

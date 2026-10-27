@@ -108,14 +108,21 @@ known revision, preventing silent descriptor tampering or rollback.
 
 ## Choose a backend
 
-Open **Settings → General → Manual project sync**.
+Open **Settings → Remote Access → Manual project sync**.
 
 ### Self-hosted relay
 
 Set **Storage backend** to **Self-hosted relay server**, then enter its HTTPS
 URL and bearer token. The token is stored in the operating-system keyring and
-is not included in project data or device codes. Plain HTTP is accepted only
-for `localhost`, for local development.
+is not included in project data or device codes.
+
+Plain HTTP is accepted for `localhost` and for private network addresses:
+`10.x.x.x`, `172.16.x.x` to `172.31.x.x`, `192.168.x.x`, link-local addresses
+and their IPv6 counterparts. A relay inside a lab's own network therefore
+needs no domain or certificate: enter `http://10.10.3.27:8787`. The address
+has to be an IP literal; a host name always needs HTTPS, because whoever
+answers DNS decides where a name leads. Over HTTP the bearer token crosses
+that network unencrypted, while project contents stay encrypted end to end.
 
 Run the bundled relay with:
 
@@ -130,6 +137,9 @@ Put an HTTPS reverse proxy in front of the relay for access from other devices.
 The relay stores files under `WISP_RELAY_ROOT`, uses atomic file replacement,
 and compares the submitted base revision with the current project head before
 committing. Back up this directory like any other application data.
+The same relay also serves [remote web access](remote-access.md), and can
+run [as a container](remote-access.md#run-the-relay-in-docker). Started with
+`WISP_LAB=1` it additionally hosts a [Wisp Lab](wisp-lab.md).
 
 ### Baidu Netdisk, Nutstore, or another shared folder
 
@@ -157,7 +167,7 @@ compare-and-swap behavior than a cloud-synchronized folder.
 ## Additional device
 
 1. Configure the relay token, or select that device's local cloud-drive folder.
-2. Open **Settings → General → Manual project sync**, press
+2. Open **Settings → Remote Access → Manual project sync**, press
    **Join synced project**, and paste the device code.
 3. Choose a new local parent directory. Wisp downloads into staging, verifies
    every encrypted blob and plaintext checksum, then imports the project under

@@ -4,6 +4,16 @@ Build, architecture, CLI environment, and tests. For first-run desktop setup see
 [basic configuration](basic-configuration.md). For HTTP model profiles see
 [model configuration](model-configuration.md).
 
+## Native mobile clients
+
+The [iOS client](../apps/ios/README.md) and the
+[Android client framework](../apps/android/README.md) connect to the same encrypted
+desktop remote-access service. Android uses Kotlin / Jetpack Compose, a pure JVM
+protocol module, and the existing iOS synthetic demo assets. Open `apps/android`
+in Android Studio with JDK 21 and SDK 36; the Android README lists the implemented
+features, remaining iOS parity work, and offline tests. Neither mobile client runs
+the scientific agent on the phone.
+
 ## WebView composer input smoke test
 
 For #1413, run `cd ui-tests && npx playwright test tests/composer-input.spec.ts`.
@@ -43,9 +53,15 @@ python3 docs/build_tutorials.py --check
 python3 -m unittest discover -s docs -p 'test_build_tutorials.py'
 ```
 
+No test needs editing for a new or reordered article. The build tests and the
+browser tests take the article list, titles and order from `docs/wechat/` and
+from the generated directory.
+
 Each article must start with a level-one title. `READING_ORDER` in the generator
 puts Quick Start first, then the four introductory tutorials, MCP, Skills, trajectories,
 research journey, and the advanced CLI and ACP tutorials; other articles are appended alphabetically.
+List a new Basics or Tips article in `READING_ORDER`: an unlisted article goes after the
+last Advanced one, and the build tests fail when that leaves the card numbers out of order.
 `TUTORIAL_GROUPS` defines the directory sections. Chinese title prefixes select Basics
 or Tips; other articles appear in Advanced. Filenames determine
 stable article URLs and directory card anchors. Edit the page shell outside the generated
@@ -136,7 +152,7 @@ Prerequisites:
 ```bash
 cargo run build      # fast, one-shot desktop build; no watcher or installer
 cargo run build-win  # WinUI 3 preview, on Windows
-cargo run build-mac  # SwiftUI preview, on macOS
+cargo run build-mac  # SwiftUI app, on macOS
 cargo run dev        # hot-reload: Trunk serves the UI, Tauri opens the window
 cargo tauri dev      # hot-reload: Trunk serves the UI, Tauri opens the window
 cargo tauri build    # installers under target/release/bundle
@@ -157,9 +173,9 @@ build command again. No development server is needed to launch the result:
 | `cargo run build` (Linux/macOS) | `./target/debug/wisp-tauri` |
 | `cargo run build` (Windows) | `.\target\debug\wisp-tauri.exe` |
 | `cargo run build-win` (Windows) | `.\target\native-windows\Wisp.Science.Preview.exe` |
-| `cargo run build-mac` (macOS) | `open "target/native-macos/Wisp Science Preview.app"` |
+| `cargo run build-mac` (macOS) | `open "target/native-macos/Wisp Science SwiftUI.app"` |
 
-Keep the generated resource folders beside the executable. Native previews
+Keep the generated resource folders beside the executable. Native apps
 also package the Rust service and desktop helper; they use the existing native
 UI implementations and their current feature coverage. WinUI 3 needs Windows,
 .NET 8, the Windows SDK, the Rust MSVC toolchain, Python (`python` on PATH), and
@@ -171,7 +187,7 @@ WinUI 3 from Linux/macOS or SwiftUI from Linux/Windows.
 For optimized builds, use `cargo run build --release` (the existing Tauri
 installer pipeline), `cargo run build-win --release` (all three executables in
 `target/native-windows-release`), or `cargo run build-mac --release` (the app in
-`target/native-macos-release`). Native builds are local previews, without
+`target/native-macos-release`). Local native builds are for testing, without
 release signing/notarization. macOS also accepts `--qa` and
 `--target aarch64-apple-darwin|x86_64-apple-darwin`; architecture builds add that
 target directory under the native output folder. Plain desktop output paths
@@ -284,9 +300,11 @@ If the window never appears after install, **Quit** from the tray icon and
 repair the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)
 (Evergreen Standalone Installer, run as administrator), then reopen Wisp.
 
-Packaged Windows builds have no console. Each launch writes
-`%APPDATA%\science.wisp-science\wisp-science\logs\wisp.log` (overwritten on the
-next launch). The `startup finished` line breaks pre-first-paint work by phase
+Packaged Windows and macOS builds have no console. Each launch writes
+`wisp.log` next to the database (Windows:
+`%APPDATA%\science.wisp-science\wisp-science\logs\wisp.log`; macOS:
+`~/Library/Application Support/science.wisp-science/wisp-science/logs/wisp.log`),
+keeping the previous launch as `wisp.previous.log`. The `startup finished` line breaks pre-first-paint work by phase
 (`total=…ms store=…ms skills=…ms …`). Recovery sweeps, removing the retired
 scratch chat's sandbox folder, and restoring project windows run after the
 window is interactive and are logged as `deferred startup finished`.
@@ -326,6 +344,12 @@ Eval and the long-lived JSONL RPC protocol:
 | `WISP_VISION_PROVIDER` | Vision provider kind; defaults to `WISP_PROVIDER`           |
 | `WISP_VISION_API_URL` | Vision API root; defaults to `WISP_API_URL` or the provider default |
 | `WISP_VISION_API_KEY` | Optional vision key; defaults to `WISP_API_KEY`             |
+| `TYPESAFE_API_KEY`   | Decision model: TypeSafe Jev, for `map_items` `decide` and `desktop_autopilot` |
+| `WISP_DECISION_API_URL` | Decision model: any System One server instead of TypeSafe (e.g. `https://api.bamboonode.dev`, `http://127.0.0.1:8090`) |
+| `WISP_DECISION_API_KEY` | Key for `WISP_DECISION_API_URL`; omit for a keyless self-hosted server |
+| `WISP_DECISION_MODEL` | Decision model id; empty uses the server default            |
+| `WISP_DECISION_THINK_MODE` | `auto`, `never`, or `always` for servers that think when unsure; empty sends nothing |
+| `WISP_DECISION_TIMEOUT_SECS` | Per-request timeout, 1–600 (default 10)               |
 | `WISP_MAX_CONTEXT`   | Context budget (default 1,000,000)                            |
 | `WISP_MAX_ITER`      | Max agent iterations per turn (default 100; 0 = unlimited)    |
 | `WISP_SKILLS_PATH`   | Extra `;`/`:`-separated SKILL.md catalog dirs                 |
@@ -463,7 +487,7 @@ wisp-science/
 │  ├─ wisp-dto/     Shared data contracts for UI and application services
 │  └─ wisp-cli/     `wisp-science` headless binary
 ├─ src-tauri/       Tauri v2 desktop shell (commands + agent event stream)
-├─ apps/macos/      SwiftUI project browser preview + Foundation transport
+├─ apps/macos/      SwiftUI app + Foundation transport
 ├─ apps/windows/    WinUI 3 preview, JSONL client, workspace actions, navigation and contract tests
 ├─ ui/              Leptos CSR frontend (built by Trunk, loaded in WebView2)
 ├─ python/          kernel_worker.py + mock MCP server (uv-managed)
@@ -482,7 +506,7 @@ wisp-science/
   counts, stars, sync metadata, and best-effort enrichment fallbacks are preserved.
   `projects::project_status_counts` also serves the desktop's individual project
   summaries. This crate has no Tauri or Leptos dependency and does not open a
-  separate database. The SwiftUI and WinUI 3 previews use read-only `wisp-service`
+  separate database. The SwiftUI app and WinUI 3 preview use read-only `wisp-service`
   processes through the same versioned boundary. See
   [Native project browser](native-project-browser.md) for build instructions,
   status limitations, and the JSONL protocol. Verify the query boundary with
@@ -539,6 +563,14 @@ wisp-science/
   npx playwright install chromium
   npx playwright test
   ```
+
+  The suite is fully parallel: every test boots its own page, so Playwright
+  spreads tests across workers even within one file (`ui.spec.ts` alone holds
+  half of them). Locally it uses half the CPU cores; CI runs four workers on
+  each of four shards (`npx playwright test --shard=1/4`), which brings the
+  `ui-e2e` jobs from about 40 minutes to under ten. Tests must not depend on
+  another test having run first or on module-level state another test
+  mutated. Pass `--workers=1` to run a file in order while debugging.
 
 ## Roadmap
 

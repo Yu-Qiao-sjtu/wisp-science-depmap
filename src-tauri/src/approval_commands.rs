@@ -1,6 +1,10 @@
-use super::{save_approval_grants, AppState, ApprovalGrantKey, ConfirmRequest, PendingConfirm};
+use super::{
+    save_approval_grants, AppState, ApprovalGrantKey, ApprovalGrants, ConfirmRequest,
+    PendingConfirm,
+};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, RwLock};
 use tauri::State;
 
 const MIN_REMOTE_APPROVAL_PREFIX: usize = 6;
@@ -42,6 +46,38 @@ pub(crate) fn session_full_permission(state: &AppState, session_id: &str) -> boo
         .read()
         .map(|sessions| sessions.contains(session_id))
         .unwrap_or(false)
+}
+
+/// Snapshot the source's live permissions when creating a conversation branch
+/// or exploration. Grants remain session-scoped and in memory; later changes
+/// in either conversation do not affect the other. One-shot decisions and
+/// pending confirmations are deliberately not part of this snapshot.
+pub(crate) fn copy_session_permissions(
+    approval_grants: &Mutex<ApprovalGrants>,
+    full_permission_sessions: &RwLock<HashSet<String>>,
+    source: &str,
+    target: &str,
+) -> Result<(), String> {
+    let mut grants = approval_grants
+        .lock()
+        .map_err(|_| "Session approval grants are unavailable.".to_string())?;
+    let mut full_permission = full_permission_sessions
+        .write()
+        .map_err(|_| "Full Permission state is unavailable.".to_string())?;
+    match grants.session.get(source).cloned() {
+        Some(keys) => {
+            grants.session.insert(target.to_string(), keys);
+        }
+        None => {
+            grants.session.remove(target);
+        }
+    }
+    if full_permission.contains(source) {
+        full_permission.insert(target.to_string());
+    } else {
+        full_permission.remove(target);
+    }
+    Ok(())
 }
 
 pub(super) fn cancel_pending_confirmation(state: &AppState, session_id: &str) {
@@ -220,10 +256,15 @@ fn update_session_full_permission(
     }
 }
 
-/// Only the assistant's explicit session grant overrides the IM default.
-/// Project turns (including work dispatched by the assistant) keep asking.
-pub(crate) fn force_ask_for_turn(im: bool, frame_id: &str, full_permission: bool) -> bool {
-    im && !(frame_id == crate::research_assistant::ASSISTANT_FRAME_ID && full_permission)
+/// A conversation's own Full Permission overrides the remote-origin default.
+/// Explicit review constraints (mandates and lab mail) remain independent of
+/// that session grant. Callers must never use a parent conversation's grant.
+pub(crate) fn force_ask_for_turn(
+    unattended: bool,
+    full_permission: bool,
+    explicit_review: bool,
+) -> bool {
+    explicit_review || (unattended && !full_permission)
 }
 
 #[tauri::command]
@@ -267,7 +308,30 @@ pub(crate) async fn respond_native_confirmation(
             feedback: request.feedback.clone().filter(|s| !s.trim().is_empty()),
         }
     };
-    settle_confirmation(state, &request.session_id, pending, decision, Some("once")).await
+    settle_confirmation(
+        state,
+        &request.session_id,
+        pending,
+        decision,
+        Some(request.scope.as_str()),
+    )
+    .await
+}
+
+pub(crate) fn native_approval_scopes(
+    has_grant: bool,
+    tool: &str,
+    message: &str,
+) -> Vec<wisp_dto::native_conversations::ApprovalScope> {
+    use wisp_dto::native_conversations::ApprovalScope::*;
+    let ordinary = has_grant
+        && !matches!(tool, "update_plan" | "resource_conflict" | "image_resize")
+        && !(message.starts_with("Workflow node ") && message.contains(" requests confirmation"));
+    if ordinary {
+        vec![Once, Session, Project, Global]
+    } else {
+        vec![Once]
+    }
 }
 
 fn take_native_confirmation(
@@ -280,6 +344,18 @@ fn take_native_confirmation(
         .is_some_and(|p| p.request.approval_id == request.approval_id && p.project_id == project)
     {
         return Err("Approval expired; refresh the conversation".into());
+    }
+    let current = pending.get(&request.session_id).unwrap();
+    if !native_approval_scopes(
+        current.grant.is_some(),
+        &current.request.tool,
+        &current.request.message,
+    )
+    .contains(&request.scope)
+        || (!request.approved
+            && request.scope != wisp_dto::native_conversations::ApprovalScope::Once)
+    {
+        return Err("This approval cannot grant the selected scope".into());
     }
     Ok(pending.remove(&request.session_id).unwrap())
 }
@@ -382,6 +458,82 @@ pub(super) async fn revoke_all_approval_grants(state: State<'_, AppState>) -> Re
 mod tests {
     use super::*;
 
+    #[test]
+    fn copied_session_permissions_are_independent_and_remain_ephemeral() {
+        let run = ApprovalGrantKey {
+            kind: "tool".into(),
+            target: "run_in_context".into(),
+        };
+        let shell = ApprovalGrantKey {
+            kind: "command".into(),
+            target: "shell".into(),
+        };
+        let project = ApprovalGrantKey {
+            kind: "tool".into(),
+            target: "python".into(),
+        };
+        let global = ApprovalGrantKey {
+            kind: "mcp_app_tool".into(),
+            target: "connector:lookup".into(),
+        };
+        let mut original = ApprovalGrants::default();
+        original.grant("session", "source", "p", run.clone());
+        original.grant("session", "source", "p", shell.clone());
+        original.grant("project", "source", "p", project.clone());
+        original.grant("global", "source", "p", global.clone());
+        let grants = Mutex::new(original);
+        let full_permission = RwLock::new(HashSet::from(["source".to_string()]));
+
+        for target in ["branch", "exploration"] {
+            copy_session_permissions(&grants, &full_permission, "source", target).unwrap();
+            let snapshot = grants.lock().unwrap();
+            assert!(full_permission.read().unwrap().contains(target));
+            assert_eq!(
+                snapshot.session.get(target),
+                Some(&HashSet::from([run.clone(), shell.clone()]))
+            );
+            assert!(snapshot.allows(target, "p", &project));
+            assert!(!snapshot.allows(target, "other-project", &project));
+            assert!(snapshot.allows(target, "other-project", &global));
+            assert!(!snapshot.allows("unrelated", "p", &run));
+        }
+
+        let mut snapshot = grants.lock().unwrap();
+        snapshot.revoke("session", Some("branch"), None, &run);
+        snapshot.revoke("session", Some("source"), None, &shell);
+        full_permission.write().unwrap().remove("branch");
+        assert!(snapshot.allows("source", "p", &run));
+        assert!(snapshot.allows("exploration", "p", &run));
+        assert!(snapshot.allows("branch", "p", &shell));
+        assert!(full_permission.read().unwrap().contains("source"));
+        assert!(full_permission.read().unwrap().contains("exploration"));
+        let restored = ApprovalGrants::from_persisted(snapshot.persisted());
+        assert!(!restored.allows("exploration", "p", &run));
+        assert!(restored.allows("exploration", "p", &project));
+        assert!(restored.allows("exploration", "other-project", &global));
+    }
+
+    #[test]
+    fn copying_restricted_permissions_does_not_enable_full_permission_or_ungranted_tools() {
+        let run = ApprovalGrantKey {
+            kind: "tool".into(),
+            target: "run_in_context".into(),
+        };
+        let grants = Mutex::new(ApprovalGrants::default());
+        grants
+            .lock()
+            .unwrap()
+            .grant("session", "source", "p", run.clone());
+        let full_permission = RwLock::new(HashSet::new());
+        copy_session_permissions(&grants, &full_permission, "source", "branch").unwrap();
+        assert!(grants.lock().unwrap().allows("branch", "p", &run));
+        assert!(full_permission.read().unwrap().is_empty());
+
+        copy_session_permissions(&grants, &full_permission, "fresh", "exploration").unwrap();
+        assert!(!grants.lock().unwrap().allows("exploration", "p", &run));
+        assert!(full_permission.read().unwrap().is_empty());
+    }
+
     fn pending(approval_id: &str) -> PendingConfirm {
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let mut request = ConfirmRequest::new(
@@ -407,6 +559,7 @@ mod tests {
             approval_id: "old-approval".into(),
             approved: true,
             feedback: None,
+            scope: Default::default(),
         };
         assert!(take_native_confirmation(&mut entries, "project", &request).is_err());
         assert_eq!(entries.len(), 1);
@@ -415,6 +568,48 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(take_native_confirmation(&mut entries, "project", &request).is_ok());
         assert!(take_native_confirmation(&mut entries, "project", &request).is_err());
+    }
+
+    #[test]
+    fn native_scope_requires_a_grant_and_special_confirmations_remain_once() {
+        use wisp_dto::native_conversations::ApprovalScope;
+        let mut request = wisp_dto::native_conversations::ApprovalRequest {
+            session_id: "session".into(),
+            approval_id: "approval".into(),
+            approved: true,
+            feedback: None,
+            scope: ApprovalScope::Project,
+        };
+        let mut entries = HashMap::from([("session".into(), pending("approval"))]);
+        assert!(take_native_confirmation(&mut entries, "project", &request).is_err());
+        assert_eq!(entries.len(), 1);
+        entries.get_mut("session").unwrap().grant = Some(ApprovalGrantKey {
+            kind: "tool".into(),
+            target: "shell".into(),
+        });
+        request.approved = false;
+        assert!(take_native_confirmation(&mut entries, "project", &request).is_err());
+        request.approved = true;
+        assert!(take_native_confirmation(&mut entries, "project", &request).is_ok());
+        for tool in ["update_plan", "resource_conflict", "image_resize"] {
+            assert_eq!(
+                native_approval_scopes(true, tool, "confirm"),
+                vec![ApprovalScope::Once]
+            );
+        }
+        assert_eq!(
+            native_approval_scopes(true, "shell", "Workflow node shell requests confirmation"),
+            vec![ApprovalScope::Once]
+        );
+        assert_eq!(
+            native_approval_scopes(true, "shell", "Ordinary tool"),
+            vec![
+                ApprovalScope::Once,
+                ApprovalScope::Session,
+                ApprovalScope::Project,
+                ApprovalScope::Global
+            ]
+        );
     }
 
     #[tokio::test]
@@ -435,6 +630,7 @@ mod tests {
                 approval_id: "project-approval".into(),
                 approved,
                 feedback: None,
+                scope: Default::default(),
             };
             assert!(take_native_confirmation(
                 &mut entries,
@@ -473,7 +669,7 @@ mod tests {
             (ASSISTANT_FRAME_ID.into(), pending("assistant-approval")),
             ("project-session".into(), pending("project-approval")),
         ]);
-        assert!(force_ask_for_turn(true, ASSISTANT_FRAME_ID, false));
+        assert!(force_ask_for_turn(true, false, false));
         let taken =
             update_session_full_permission(&mut entries, &sessions, ASSISTANT_FRAME_ID, true)
                 .unwrap()
@@ -486,12 +682,16 @@ mod tests {
         assert!(entries.contains_key("project-session"));
         assert!(!force_ask_for_turn(
             true,
-            ASSISTANT_FRAME_ID,
-            sessions.read().unwrap().contains(ASSISTANT_FRAME_ID)
+            sessions.read().unwrap().contains(ASSISTANT_FRAME_ID),
+            false,
         ));
-        // Desktop full permission must still not bypass project IM approval.
-        assert!(force_ask_for_turn(true, "project-session", true));
-        assert!(!force_ask_for_turn(false, "project-session", true));
+        // The assistant's grant is not inherited by a dispatched project turn.
+        assert!(force_ask_for_turn(
+            true,
+            sessions.read().unwrap().contains("project-session"),
+            false,
+        ));
+        assert!(!force_ask_for_turn(false, false, false));
         assert!(
             update_session_full_permission(&mut entries, &sessions, ASSISTANT_FRAME_ID, true)
                 .unwrap()
@@ -507,9 +707,102 @@ mod tests {
         assert!(entries.contains_key(ASSISTANT_FRAME_ID));
         assert!(force_ask_for_turn(
             true,
-            ASSISTANT_FRAME_ID,
-            sessions.read().unwrap().contains(ASSISTANT_FRAME_ID)
+            sessions.read().unwrap().contains(ASSISTANT_FRAME_ID),
+            false,
         ));
+    }
+
+    #[tokio::test]
+    async fn project_full_permission_releases_pending_run_and_skips_later_remote_prompts() {
+        let sessions = std::sync::RwLock::new(std::collections::HashSet::new());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut run = pending("run-approval");
+        run.request = ConfirmRequest::new(
+            "project-session",
+            "Run tool 'run_in_context'?".into(),
+            "run_in_context",
+            String::new(),
+        );
+        run.tx = tx;
+        let mut entries = HashMap::from([("project-session".into(), run)]);
+        let check_asks = |session: &str, expected: bool| {
+            for origin in [
+                crate::TurnOrigin::Im,
+                crate::TurnOrigin::QueuedUnattended(1),
+                crate::TurnOrigin::Subagent { unattended: true },
+            ] {
+                assert_eq!(
+                    force_ask_for_turn(
+                        origin.force_ask_mutations(),
+                        sessions.read().unwrap().contains(session),
+                        false,
+                    ),
+                    expected,
+                    "{origin:?}: {session}",
+                );
+            }
+        };
+        check_asks("project-session", true);
+
+        let taken =
+            update_session_full_permission(&mut entries, &sessions, "project-session", true)
+                .unwrap()
+                .unwrap();
+        taken
+            .tx
+            .send(wisp_tools::ConfirmDecision::Approved)
+            .unwrap();
+        assert!(rx.await.unwrap().approved());
+        assert!(entries.is_empty());
+        // Enabling Full Permission must cover subsequent calls in the same
+        // running iOS/browser/IM turn, rather than only settling the current card.
+        check_asks("project-session", false);
+        check_asks("other-project-session", true);
+        check_asks("child-session", true);
+
+        update_session_full_permission(&mut entries, &sessions, "project-session", false).unwrap();
+        check_asks("project-session", true);
+    }
+
+    #[test]
+    fn explicit_turn_review_survives_full_permission() {
+        // Mandates and lab mail retain their review requirement on desktop
+        // and remote turns, independently of the conversation's grant.
+        for unattended in [false, true] {
+            for full_permission in [false, true] {
+                assert!(force_ask_for_turn(unattended, full_permission, true));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn subagent_full_permission_releases_only_its_waiting_operation_and_is_revocable() {
+        let sessions = std::sync::RwLock::new(std::collections::HashSet::new());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut child = pending("child-approval");
+        child.request.frame_id = "child".into();
+        child.tx = tx;
+        let mut entries = HashMap::from([
+            ("child".into(), child),
+            ("parent".into(), pending("parent-approval")),
+            ("sibling".into(), pending("sibling-approval")),
+        ]);
+        let taken = update_session_full_permission(&mut entries, &sessions, "child", true)
+            .unwrap()
+            .unwrap();
+        taken
+            .tx
+            .send(wisp_tools::ConfirmDecision::Approved)
+            .unwrap();
+        assert!(rx.await.unwrap().approved());
+        assert_eq!(
+            *sessions.read().unwrap(),
+            std::collections::HashSet::from(["child".to_string()])
+        );
+        assert!(entries.contains_key("parent") && entries.contains_key("sibling"));
+        update_session_full_permission(&mut entries, &sessions, "child", false).unwrap();
+        assert!(sessions.read().unwrap().is_empty());
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]

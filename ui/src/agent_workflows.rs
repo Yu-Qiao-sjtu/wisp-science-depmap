@@ -767,6 +767,10 @@ pub(super) struct AgentPanelState {
     pub(super) error: RwSignal<Option<String>>,
     pub(super) result: RwSignal<Option<AgentWorkflowResultDetail>>,
     pub(super) legacy_conversion_requested: RwSignal<Option<String>>,
+    /// Subagents of the current conversation (child conversations and explore runs).
+    pub(super) activity: RwSignal<Vec<SubagentActivity>>,
+    /// Activity id open in the panel's detail page.
+    pub(super) selected: RwSignal<Option<String>>,
 }
 
 impl AgentPanelState {
@@ -780,6 +784,8 @@ impl AgentPanelState {
             retry_budgets: create_rw_signal(HashMap::new()),
             error: create_rw_signal(None),
             result: create_rw_signal(None),
+            activity: create_rw_signal(vec![]),
+            selected: create_rw_signal(None),
             legacy_conversion_requested: create_rw_signal(None),
         }
     }
@@ -906,6 +912,15 @@ pub(super) fn refresh_agent_workflows(state: AgentPanelState) {
                 }
             }
             Err(invoke_error) => state.error.set(Some(js_error_text(invoke_error))),
+        }
+        let args = serde_json::json!({ "sessionId": state.session_id.get_untracked() });
+        if let Ok(value) = invoke_checked("list_subagent_activity", to_value(&args).unwrap()).await
+        {
+            if let Ok(items) = serde_wasm_bindgen::from_value::<Vec<SubagentActivity>>(value) {
+                if state.activity.with_untracked(|current| current != &items) {
+                    state.activity.set(items);
+                }
+            }
         }
     });
 }
@@ -3774,7 +3789,6 @@ fn workflow_actions(
     let run_busy_id = workflow_id.clone();
     let cancel_id = workflow_id.clone();
     let retry_snapshot = snapshot.clone();
-    let delegation_enabled = snapshot.delegation_enabled;
     let automatic = snapshot.approval_policy == AgentApprovalPolicy::AutoSafe;
     view! {
         <div class="agent-workflow-actions">
@@ -3786,7 +3800,7 @@ fn workflow_actions(
             {(workflow.status == "draft").then(|| {
                 view! {
                     <button type="button" class="agents-primary" data-testid="agent-approve"
-                        disabled=!delegation_enabled || legacy
+                        disabled=legacy
                         on:click=move |_| invoke_workflow_action(
                             "approve_agent_workflow",
                             serde_json::json!({
@@ -3809,7 +3823,7 @@ fn workflow_actions(
             })}
             {(workflow.status == "approved").then(|| view! {
                 <button type="button" class="agents-primary" data-testid="agent-run"
-                    disabled=move || legacy || !delegation_enabled || state.launching.with(|ids| ids.contains(&run_busy_id))
+                    disabled=move || legacy || state.launching.with(|ids| ids.contains(&run_busy_id))
                     on:click=move |_| launch_workflow(run_id.clone(), state)>
                     {t(locale.get(), "agents.run")}
                 </button>
@@ -3824,7 +3838,7 @@ fn workflow_actions(
             })}
             {matches!(workflow.status.as_str(), "failed" | "cancelled").then(|| view! {
                 <button type="button" class="agents-primary" data-testid="agent-retry"
-                    disabled=!delegation_enabled || legacy
+                    disabled=legacy
                     on:click=move |_| retry_workflow(retry_snapshot.clone(), state)>
                     {t(locale.get(), "agents.retry")}
                 </button>
@@ -3832,6 +3846,14 @@ fn workflow_actions(
         </div>
     }
     .into_view()
+}
+
+fn execution_limit_label(locale: Locale, limit: u64) -> String {
+    if limit == 0 {
+        t(locale, "agents.execution.unlimited").into()
+    } else {
+        limit.to_string()
+    }
 }
 
 fn dynamic_workflow_card(
@@ -3850,7 +3872,6 @@ fn dynamic_workflow_card(
         AgentApprovalPolicy::AutoSafe => t(locale.get(), "agents.approval.auto_safe"),
     };
     let actions = workflow_actions(&snapshot, state, locale, open_workflows);
-    let workflow_delegation_enabled = snapshot.delegation_enabled;
     let nested = workflow.depth > 0;
     let card_class = if nested {
         "agent-workflow-card dynamic nested"
@@ -3887,6 +3908,28 @@ fn dynamic_workflow_card(
     };
     let progress_text = format!("{completed_count}/{task_count}");
     let running_text = (!running_tasks.is_empty()).then(|| running_tasks.join("、"));
+
+    let execution_details = snapshot.execution.as_ref().filter(|_| !nested).map(|execution| {
+        let round = (execution.generation + 1).to_string();
+        let summary = tf(locale.get(), "agents.execution.usage", &[
+            ("round", &round),
+            ("tokens", &execution.usage.tokens.to_string()),
+            ("token_limit", &execution_limit_label(locale.get(), execution.limits.tokens)),
+            ("tools", &execution.usage.tool_calls.to_string()),
+            ("tool_limit", &execution_limit_label(locale.get(), execution.limits.tool_calls)),
+        ]);
+        let history = tf(locale.get(), "agents.execution.history", &[
+            ("tokens", &execution.cumulative_usage.tokens.to_string()),
+            ("tools", &execution.cumulative_usage.tool_calls.to_string()),
+        ]);
+        let reason = execution.stop_reason.clone();
+        let retryable = matches!(workflow.status.as_str(), "failed" | "cancelled");
+        view! {
+            <div class="agent-usage" data-testid="agent-execution-usage">{summary}<br/>{history}</div>
+            {reason.map(|reason| view! { <div class="agents-error" data-testid="agent-execution-error">{reason}</div> })}
+            {retryable.then(|| view! { <p class="agent-confirm-hint" data-testid="agent-retry-hint">{t(locale.get(), "agents.execution.retry_hint")}</p> })}
+        }.into_view()
+    });
     view! {
         <article class=card_class data-workflow-id=workflow_id.clone()
             data-root-workflow-id=root_workflow_id data-parent-attempt-id=parent_attempt_id
@@ -3920,11 +3963,9 @@ fn dynamic_workflow_card(
                     <span style=format!("width: {progress_percent}%")></span>
                 </div>
             </section>
-            {workflow.requires_confirmation.then(|| view! {
+            {execution_details}
+            {(workflow.requires_confirmation && workflow.status == "draft").then(|| view! {
                 <div class="agent-confirm-hint">{t(locale.get(), "agents.confirm_hint")}</div>
-            })}
-            {(!nested && !workflow_delegation_enabled).then(|| view! {
-                <div class="agent-delegation-off">{t(locale.get(), "agents.workflow_disabled")}</div>
             })}
             {(!dynamic.approval_reasons.is_empty()).then(|| view! {
                 <section class="agent-approval-reasons" aria-label=t(locale.get(), "agents.approval_reasons")>
@@ -4010,7 +4051,7 @@ fn dynamic_workflow_card(
                     let retry_budget_value = task_budget.max_tokens
                         .map(|value| value.to_string())
                         .unwrap_or_default();
-                    let show_retry_budget = !is_run_activity && task_status == "failed";
+                    let show_retry_budget = !is_run_activity && matches!(task_status.as_str(), "failed" | "cancelled");
                     let result_workflow_id = workflow_id.clone();
                     let result_step_id = task.stored_step_id.clone();
                     view! {
@@ -4536,71 +4577,323 @@ fn workflow_result_dialog(state: AgentPanelState, locale: RwSignal<Locale>) -> V
     .into_view()
 }
 
+fn activity_status_label(locale: Locale, status: &str) -> String {
+    t(
+        locale,
+        match status {
+            "running" => "agents.activity.status.running",
+            "completed" => "agents.activity.status.completed",
+            "failed" => "agents.activity.status.failed",
+            _ => "agents.activity.status.idle",
+        },
+    )
+}
+
+fn format_duration(secs: i64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+fn activity_meta(item: &SubagentActivity, locale: Locale) -> String {
+    let mut parts = vec![t(
+        locale,
+        match item.kind.as_str() {
+            "explore" => "agents.activity.kind.explore",
+            "expert" => "agents.activity.kind.expert",
+            _ => "agents.activity.kind.conversation",
+        },
+    )];
+    if item.tool_calls > 0 {
+        parts.push(tf(
+            locale,
+            "agents.activity.tool_calls",
+            &[("count", &item.tool_calls.to_string())],
+        ));
+    }
+    if let Some(end) = item
+        .ended_at
+        .filter(|end| item.started_at > 0 && *end >= item.started_at)
+    {
+        parts.push(format_duration(end - item.started_at));
+    }
+    parts.join(" · ")
+}
+
+fn activity_icon(item: &SubagentActivity) -> &'static str {
+    match item.kind.as_str() {
+        "explore" => "search",
+        "expert" => "brain",
+        _ => "bot",
+    }
+}
+
+fn activity_row(item: SubagentActivity, state: AgentPanelState, locale: Locale) -> View {
+    let id = item.id.clone();
+    let status_class = format!("agent-activity-status {}", item.status);
+    let meta = activity_meta(&item, locale);
+    let summary = item.summary.clone();
+    view! {
+        <button type="button" class="agent-activity-row" data-testid="agent-activity-row"
+            data-activity-id=item.id.clone() data-activity-kind=item.kind.clone()
+            data-activity-status=item.status.clone()
+            on:click=move |_| state.selected.set(Some(id.clone()))>
+            <span class="agent-activity-icon">{compose_icon(activity_icon(&item))}</span>
+            <span class="agent-activity-body">
+                <span class="agent-activity-title">{item.title.clone()}</span>
+                <span class="agent-activity-meta">{if summary.is_empty() { meta } else { summary }}</span>
+            </span>
+            <span class=status_class>{activity_status_label(locale, &item.status)}</span>
+        </button>
+    }
+    .into_view()
+}
+
+fn activity_detail(
+    item: SubagentActivity,
+    state: AgentPanelState,
+    locale: Locale,
+    open_session: Callback<String>,
+) -> View {
+    let running = item.status == "running";
+    let status_class = format!("agent-activity-status {}", item.status);
+    let answer_html = (!item.answer.trim().is_empty()).then(|| md_to_html(&item.answer));
+    let open_id = item.session_id.clone();
+    let stop_id = item.session_id.clone().filter(|_| running);
+    let back_label = t(locale, "agents.activity.back");
+    let no_answer = t(
+        locale,
+        if running {
+            "agents.activity.thinking"
+        } else {
+            "agents.activity.no_answer"
+        },
+    );
+    view! {
+        <div class="agent-activity-detail" data-testid="agent-activity-detail" data-activity-id=item.id.clone()>
+            <div class="agent-activity-detail-head">
+                <button type="button" class="agent-activity-back" data-testid="agent-activity-back"
+                    title=back_label.clone() aria-label=back_label
+                    on:click=move |_| state.selected.set(None)>
+                    {compose_icon("arrow-left")}
+                </button>
+                <span class="agent-activity-icon">{compose_icon(activity_icon(&item))}</span>
+                <strong>{item.title.clone()}</strong>
+            </div>
+            <div class="agent-activity-facts">
+                <span class=status_class>{activity_status_label(locale, &item.status)}</span>
+                <span class="agent-activity-meta">{activity_meta(&item, locale)}</span>
+                {stop_id.map(|sid| view! {
+                    <button type="button" class="agents-danger" data-testid="agent-activity-stop"
+                        on:click=move |_| {
+                            let sid = sid.clone();
+                            spawn_local(async move {
+                                let args = serde_json::json!({ "sessionId": sid });
+                                if let Err(error) = invoke_checked("stop_agent", to_value(&args).unwrap()).await {
+                                    show_toast(&js_error_text(error));
+                                }
+                                refresh_agent_workflows(state);
+                            });
+                        }>
+                        {t(locale, "agents.activity.stop")}
+                    </button>
+                })}
+                {open_id.map(|sid| view! {
+                    <button type="button" class="agents-secondary" data-testid="agent-activity-open"
+                        on:click=move |_| open_session.call(sid.clone())>
+                        {compose_icon("chat")}
+                        <span>{t(locale, "agents.activity.open_chat")}</span>
+                    </button>
+                })}
+            </div>
+            {(!item.instruction.trim().is_empty()).then(|| view! {
+                <details class="agent-activity-section" data-testid="agent-activity-instruction">
+                    <summary>{t(locale, "agents.activity.instruction")}</summary>
+                    <pre class="agent-task-instruction">{item.instruction.clone()}</pre>
+                </details>
+            })}
+            <section class="agent-activity-section">
+                <h3>{t(locale, "agents.activity.answer")}</h3>
+                {match answer_html {
+                    Some(html) => view! {
+                        <div class="agent-result-markdown md" data-testid="agent-activity-answer" inner_html=html></div>
+                    }.into_view(),
+                    None => view! { <p class="agent-activity-none">{no_answer}</p> }.into_view(),
+                }}
+            </section>
+            {item.trace_path.clone().map(|path| view! {
+                <div class="agent-activity-trace">
+                    <span>{t(locale, "agents.activity.trace")}</span>
+                    <code>{path}</code>
+                </div>
+            })}
+        </div>
+    }
+    .into_view()
+}
+
+fn activity_list(
+    state: AgentPanelState,
+    sessions: RwSignal<Vec<SessionInfo>>,
+    locale: RwSignal<Locale>,
+    open_workflows: Callback<()>,
+    swarm: crate::swarm::SwarmViewState,
+) -> View {
+    let has_swarm = create_memo(move |_| {
+        state
+            .session_id
+            .get()
+            .is_some_and(|id| swarm.progress.with(|all| all.contains_key(&id)))
+    });
+    view! {
+        <crate::swarm::SwarmPanel state=swarm session=state.session_id locale=locale/>
+        <div class="agent-activity-list" aria-live="polite">
+            {move || {
+                let loc = locale.get();
+                let (active, done): (Vec<_>, Vec<_>) = state.activity.get()
+                    .into_iter()
+                    .partition(|item| item.status == "running");
+                // ponytail: finished explore runs fold into one disclosure; they
+                // are seconds long and would otherwise bury the real subagents.
+                let (explore_done, done): (Vec<_>, Vec<_>) = done
+                    .into_iter()
+                    .partition(|item| item.kind == "explore");
+                if active.is_empty() && done.is_empty() && explore_done.is_empty()
+                    && state.workflows.with(|workflows| workflows.is_empty())
+                {
+                    if has_swarm.get() {
+                        return view! {}.into_view();
+                    }
+                    return view! {
+                        <div class="rp-empty"><p>{t(loc, "agents.activity.empty")}</p></div>
+                    }.into_view();
+                }
+                let completed_count = done.len() + explore_done.len();
+                let explore_count = explore_done.len().to_string();
+                view! {
+                    <section class="agent-activity-group" data-testid="agent-activity-running">
+                        <h2>{t(loc, "agents.activity.running")}<small>{active.len()}</small></h2>
+                        {if active.is_empty() {
+                            view! { <p class="agent-activity-none">{t(loc, "agents.activity.none_running")}</p> }.into_view()
+                        } else {
+                            active.into_iter().map(|item| activity_row(item, state, loc)).collect_view()
+                        }}
+                    </section>
+                    {(completed_count > 0).then(|| view! {
+                        <section class="agent-activity-group" data-testid="agent-activity-completed">
+                            <h2>{t(loc, "agents.activity.completed")}<small>{completed_count}</small></h2>
+                            {done.into_iter().map(|item| activity_row(item, state, loc)).collect_view()}
+                            {(!explore_done.is_empty()).then(|| view! {
+                                <details class="agent-explore-group" data-testid="agent-explore-group">
+                                    <summary>
+                                        {compose_icon("search")}
+                                        <span>{tf(loc, "agents.activity.explore_group", &[("count", &explore_count)])}</span>
+                                    </summary>
+                                    {explore_done.into_iter().map(|item| activity_row(item, state, loc)).collect_view()}
+                                </details>
+                            })}
+                        </section>
+                    })}
+                }.into_view()
+            }}
+        </div>
+        <div class="agent-workflow-groups" aria-live="polite">
+            {move || {
+                let session_id = state.session_id.get();
+                let groups = group_workflows(
+                    state.workflows.get(),
+                    &sessions.get(),
+                    session_id.as_deref(),
+                );
+                if groups.is_empty() {
+                    return view! {}.into_view();
+                }
+                let count = groups.iter().map(|group| group.snapshots.len()).sum::<usize>();
+                view! {
+                    <h2 class="agent-activity-heading">{t(locale.get(), "agents.activity.workflows")}<small>{count}</small></h2>
+                    {groups.into_iter().map(|group| {
+                        let frame_id = group.frame_id.clone();
+                        view! {
+                            <section class="agent-workflow-group" data-frame-id=frame_id>
+                                <div class="agent-workflow-group-head">
+                                    <span>{t(locale.get(), "agents.conversation")}</span>
+                                    <strong>{group.title}</strong>
+                                    <small>{format!(
+                                        "{} {}",
+                                        group.snapshots.len(),
+                                        t(locale.get(), "agents.workflow_count"),
+                                    )}</small>
+                                </div>
+                                <div class="agent-workflow-group-list">
+                                    {group.snapshots.into_iter().map(|snapshot| dynamic_workflow_card(
+                                        snapshot,
+                                        state,
+                                        locale,
+                                        open_workflows,
+                                    )).collect_view()}
+                                </div>
+                            </section>
+                        }
+                    }).collect_view()}
+                }.into_view()
+            }}
+        </div>
+        <div class="agents-footer">
+            <button type="button" class="agents-secondary agents-manage-workflows"
+                data-testid="agent-open-workflows"
+                on:click=move |_| open_workflows.call(())>
+                {compose_icon("branch")}
+                <span>{move || t(locale.get(), "agents.manage_workflows")}</span>
+            </button>
+        </div>
+    }
+    .into_view()
+}
+
 pub(super) fn agent_workflows_panel(
     state: AgentPanelState,
     sessions: RwSignal<Vec<SessionInfo>>,
-    delegation_enabled: RwSignal<bool>,
     locale: RwSignal<Locale>,
     open_workflows: Callback<()>,
+    open_session: Callback<String>,
+    swarm: crate::swarm::SwarmViewState,
 ) -> impl IntoView {
+    // The detail page is the topmost layer of this pane: Escape returns to the
+    // list (component-local state; the scoped window listener is removed on
+    // cleanup). A workflow result dialog above it closes first.
+    window_capture_escape(move || {
+        if swarm.open.get_untracked()
+            || state.result.get_untracked().is_some()
+            || state.selected.get_untracked().is_none()
+        {
+            return false;
+        }
+        state.selected.set(None);
+        true
+    });
+    create_effect(move |_| {
+        state.session_id.track();
+        state.selected.set(None);
+    });
     view! {
-        <div class="agents-pane dynamic-agents-panel" data-testid="agent-workflows" data-panel-version="2">
-            <div class="agents-inline-notice">
-                <strong>{move || t(locale.get(), "agents.inline_notice_title")}</strong>
-                <span>{move || t(locale.get(), "agents.inline_notice")}</span>
-                <button type="button" class="agents-secondary agents-manage-workflows"
-                    data-testid="agent-open-workflows"
-                    on:click=move |_| open_workflows.call(())>
-                    {compose_icon("branch")}
-                    <span>{move || t(locale.get(), "agents.manage_workflows")}</span>
-                </button>
-            </div>
-            {move || (!delegation_enabled.get()).then(|| view! {
-                <div class="agents-disabled">{t(locale.get(), "agents.disabled")}</div>
-            })}
+        <div class="agents-pane dynamic-agents-panel" data-testid="agent-workflows" data-panel-version="3">
             {move || state.error.get().map(|message| view! {
                 <div class="agents-error" role="alert">{message}</div>
             })}
-            <div class="agent-workflow-groups" aria-live="polite">
-                {move || {
-                    let session_id = state.session_id.get();
-                    let groups = group_workflows(
-                        state.workflows.get(),
-                        &sessions.get(),
-                        session_id.as_deref(),
-                    );
-                    if groups.is_empty() {
-                        view! {
-                            <div class="rp-empty"><p>{t(locale.get(), "agents.empty")}</p></div>
-                        }.into_view()
-                    } else {
-                        groups.into_iter().map(|group| {
-                            let frame_id = group.frame_id.clone();
-                            view! {
-                                <section class="agent-workflow-group" data-frame-id=frame_id>
-                                    <div class="agent-workflow-group-head">
-                                        <span>{t(locale.get(), "agents.conversation")}</span>
-                                        <strong>{group.title}</strong>
-                                        <small>{format!(
-                                            "{} {}",
-                                            group.snapshots.len(),
-                                            t(locale.get(), "agents.workflow_count"),
-                                        )}</small>
-                                    </div>
-                                    <div class="agent-workflow-group-list">
-                                        {group.snapshots.into_iter().map(|snapshot| dynamic_workflow_card(
-                                            snapshot,
-                                            state,
-                                            locale,
-                                            open_workflows,
-                                        )).collect_view()}
-                                    </div>
-                                </section>
-                            }
-                        }).collect_view()
-                    }
-                }}
-            </div>
+            {move || {
+                let selected = state.selected.get();
+                let item = selected.and_then(|id| {
+                    state.activity.with(|items| items.iter().find(|item| item.id == id).cloned())
+                });
+                match item {
+                    Some(item) => activity_detail(item, state, locale.get(), open_session),
+                    None => activity_list(state, sessions, locale, open_workflows, swarm),
+                }
+            }}
             {workflow_result_dialog(state, locale)}
         </div>
     }

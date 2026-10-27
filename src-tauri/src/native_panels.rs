@@ -12,6 +12,9 @@ pub(crate) async fn dispatch(
     project_id: &str,
     session: &str,
 ) -> Result<Value, String> {
+    if wisp_dto::native_files::COMMANDS.contains(&request.command.as_str()) {
+        return crate::native_files::dispatch(broker, request, project_id, session).await;
+    }
     if request.command == "native_conversation_panel_run_review" {
         return crate::native_run_review::dispatch(broker, request, project_id, session).await;
     }
@@ -137,26 +140,13 @@ pub(crate) async fn dispatch(
             ))
         }
         "native_conversation_panel_agent_delegation" => {
-            if let Some(enabled) = args.enabled {
-                crate::exploration_commands::require_writable_scope(&state.store, &scope).await?;
-                state
-                    .store
-                    .require_unarchived_session(session)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                invoke_command(
-                    broker,
-                    Some(project_id.into()),
-                    "set_session_delegation_enabled",
-                    serde_json::json!({"sessionId": session, "enabled": enabled}),
-                )
-                .await
-            } else {
-                Ok(Value::Bool(
-                    crate::delegation_runtime::session_delegation_enabled(&state.store, session)
-                        .await,
-                ))
+            // Delegation is always available; the per-conversation switch is
+            // gone. Native clients that still render it read `true` and get a
+            // clear refusal on write.
+            if args.enabled.is_some() {
+                return Err(wisp_dto::native_conversations::DELEGATION_ALWAYS_ON.into());
             }
+            Ok(Value::Bool(true))
         }
         "native_conversation_panel_agent_action" => {
             use wisp_dto::native_conversations::AgentAction;
@@ -557,6 +547,38 @@ pub(crate) async fn dispatch(
             .await
             .map_err(|e| e.to_string())?
         }
+        "native_conversation_panel_searchfiles" => {
+            let query = args.query.unwrap_or_default();
+            tokio::task::spawn_blocking(move || {
+                let hits = crate::file_browser::search_files_at(&project.root, &query, None)?;
+                serde_json::to_value(hits).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        "native_conversation_panel_export" => {
+            let path = if let Some(id) = args.artifact_id {
+                if !state
+                    .store
+                    .artifact_visible_in_scope(&id, &scope)
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    return Err("Artifact is not visible in this conversation scope".into());
+                }
+                state
+                    .store
+                    .artifact_path_in_scope(&id, &scope)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or("Artifact not found")?
+            } else {
+                args.path.ok_or("File path is required")?
+            };
+            tokio::task::spawn_blocking(move || export_source(&project.root, &path))
+                .await
+                .map_err(|e| e.to_string())?
+        }
         "native_conversation_panel_file_action" => {
             crate::exploration_commands::require_writable_scope(&state.store, &scope).await?;
             state
@@ -604,7 +626,7 @@ pub(crate) async fn dispatch(
         }
         "native_conversation_panel_readfile" => {
             let path = args.path.ok_or("File path is required")?;
-            read(project.root, path).await
+            read(project.root, path, args.render_pdf, args.render_office).await
         }
         "native_conversation_panel_readartifact" => {
             let id = args.artifact_id.ok_or("Artifact ID is required")?;
@@ -622,7 +644,7 @@ pub(crate) async fn dispatch(
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or("Artifact not found")?;
-            read(project.root, path).await
+            read(project.root, path, args.render_pdf, args.render_office).await
         }
         _ => Err("Unknown native panel command".into()),
     }
@@ -697,9 +719,15 @@ fn contract<T: serde::de::DeserializeOwned + serde::Serialize>(
     let parsed: T = serde_json::from_value(value).map_err(|e| e.to_string())?;
     serde_json::to_value(parsed).map_err(|e| e.to_string())
 }
-async fn read(root: std::path::PathBuf, path: String) -> Result<Value, String> {
+async fn read(
+    root: std::path::PathBuf,
+    path: String,
+    render_pdf: bool,
+    render_office: bool,
+) -> Result<Value, String> {
     tokio::task::spawn_blocking(move || {
-        let content = crate::file_browser::read_file_at(&root, path, None)?;
+        let content =
+            crate::file_browser::read_native_preview_at(&root, path, render_pdf, render_office)?;
         serde_json::to_value(content).map_err(|e| e.to_string())
     })
     .await
@@ -728,6 +756,58 @@ fn apply_file_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_source_is_scoped_and_preserves_original_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("data.bin"), [0, 255, 128, 10]).unwrap();
+        std::fs::write(temp.path().join("outside.bin"), b"outside").unwrap();
+        let source: wisp_dto::native_conversations::PanelExport =
+            serde_json::from_value(export_source(&root, "data.bin").unwrap()).unwrap();
+        assert_eq!(source.total_bytes, 4);
+        assert_eq!(std::fs::read(source.path).unwrap(), [0, 255, 128, 10]);
+        assert!(export_source(&root, "../outside.bin").is_err());
+        assert!(export_source(&root, ".").is_err());
+    }
+    #[test]
+    fn project_search_matches_nested_names_with_relative_action_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for directory in ["results/qc", "data", "target", ".hidden"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+            std::fs::write(root.join(directory).join("sample.csv"), b"sample").unwrap();
+        }
+        let hits = crate::file_browser::search_files_at(root, " SAMPLE ", None).unwrap();
+        assert_eq!(
+            hits.iter().map(|hit| hit.path.as_str()).collect::<Vec<_>>(),
+            ["data/sample.csv", "results/qc/sample.csv"]
+        );
+        assert_eq!(
+            crate::file_browser::search_files_at(root, "sample", Some(1))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(crate::file_browser::search_files_at(root, " ", None)
+            .unwrap()
+            .is_empty());
+        assert!(crate::file_browser::search_files_at(root, &"x".repeat(513), None).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn project_search_ignores_symlink_cycles_and_outside_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("sample-cycle")).unwrap();
+        std::fs::write(temp.path().join("outside.csv"), b"outside").unwrap();
+        std::os::unix::fs::symlink(temp.path().join("outside.csv"), root.join("sample.csv"))
+            .unwrap();
+        assert!(crate::file_browser::search_files_at(&root, "sample", None)
+            .unwrap()
+            .is_empty());
+    }
     #[test]
     fn file_actions_preserve_collisions_and_workspace_boundary() {
         use wisp_dto::native_conversations::PanelFileAction::*;
@@ -884,10 +964,129 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("report.txt"), "result").unwrap();
         std::fs::write(temp.path().join("outside.txt"), "outside").unwrap();
-        let value = read(root.clone(), "report.txt".into()).await.unwrap();
+        let value = read(root.clone(), "report.txt".into(), true, false)
+            .await
+            .unwrap();
         let content: wisp_dto::FileContent = serde_json::from_value(value).unwrap();
         assert_eq!(content.text.as_deref(), Some("result"));
         assert!(!content.truncated);
-        assert!(read(root, "../outside.txt".into()).await.is_err());
+        assert!(read(root, "../outside.txt".into(), true, false)
+            .await
+            .is_err());
     }
+
+    #[tokio::test]
+    async fn native_pdf_preview_preserves_pages_instead_of_markdown_extraction() {
+        use base64::Engine;
+        let temp = tempfile::tempdir().unwrap();
+        let bytes = include_bytes!("../tests/fixtures/native-selection.pdf");
+        std::fs::write(temp.path().join("paper.pdf"), bytes).unwrap();
+        let extracted = read(temp.path().into(), "paper.pdf".into(), false, false)
+            .await
+            .unwrap();
+        assert!(extracted["text"]
+            .as_str()
+            .unwrap()
+            .contains("Alpha selection"));
+        let content: wisp_dto::FileContent = serde_json::from_value(
+            read(temp.path().into(), "paper.pdf".into(), true, false)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(content.mime, "application/pdf");
+        assert!(content.text.is_none());
+        assert!(!content.truncated);
+        assert_eq!(content.total_bytes, Some(bytes.len() as u64));
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(content.base64.unwrap())
+                .unwrap(),
+            bytes
+        );
+        let oversized = std::fs::File::create(temp.path().join("large.pdf")).unwrap();
+        oversized.set_len(32 * 1024 * 1024 + 1).unwrap();
+        assert!(read(temp.path().into(), "large.pdf".into(), true, false)
+            .await
+            .unwrap_err()
+            .contains("byte limit"));
+    }
+
+    #[tokio::test]
+    async fn native_office_preview_validates_bytes_and_preserves_legacy_extraction() {
+        use base64::Engine;
+        let temp = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            (
+                "paper.docx",
+                include_bytes!("../../ui-tests/fixtures/office-preview.docx").as_slice(),
+            ),
+            (
+                "table.xlsx",
+                include_bytes!("../../ui-tests/fixtures/office-preview.xlsx").as_slice(),
+            ),
+            (
+                "slides.pptx",
+                include_bytes!("../../ui-tests/fixtures/office-preview.pptx").as_slice(),
+            ),
+        ] {
+            std::fs::write(temp.path().join(name), bytes).unwrap();
+            let content: wisp_dto::FileContent = serde_json::from_value(
+                read(temp.path().into(), name.into(), false, true)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(content.text.is_none());
+            assert!(!content.truncated);
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(content.base64.unwrap())
+                    .unwrap(),
+                bytes
+            );
+        }
+        for pdf_only in [false, true] {
+            let old = read(temp.path().into(), "paper.docx".into(), pdf_only, false)
+                .await
+                .unwrap();
+            assert!(old["text"]
+                .as_str()
+                .unwrap()
+                .contains("Native Office preview"));
+        }
+        std::fs::write(temp.path().join("broken.pptx"), b"not a zip").unwrap();
+        assert!(read(temp.path().into(), "broken.pptx".into(), false, true)
+            .await
+            .is_err());
+        let large = std::fs::File::create(temp.path().join("large.xlsx")).unwrap();
+        large.set_len(32 * 1024 * 1024 + 1).unwrap();
+        assert!(read(temp.path().into(), "large.xlsx".into(), false, true)
+            .await
+            .unwrap_err()
+            .contains("byte limit"));
+        assert!(
+            read(temp.path().into(), "../outside.docx".into(), false, true)
+                .await
+                .is_err()
+        );
+    }
+}
+
+fn export_source(root: &std::path::Path, path: &str) -> Result<Value, String> {
+    let real = wisp_tools::safety::validate_file_path(root, path)?;
+    let metadata = std::fs::metadata(&real).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("Only local files can be exported".into());
+    }
+    serde_json::to_value(wisp_dto::native_conversations::PanelExport {
+        name: real
+            .file_name()
+            .ok_or("File name is required")?
+            .to_string_lossy()
+            .into_owned(),
+        path: real.to_string_lossy().into_owned(),
+        total_bytes: metadata.len(),
+    })
+    .map_err(|e| e.to_string())
 }

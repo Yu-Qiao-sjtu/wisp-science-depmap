@@ -1,11 +1,47 @@
 # Native settings implementation
 
+The macOS Workflows editor opens a native canvas. Node drags follow the pointer
+distance at every zoom level, including after panning. Tasks are arranged in execution
+stages with selectable dependency curves. Drag the background to pan, drag nodes
+to arrange them, use zoom/fit controls, or select a node to edit its instructions,
+capabilities, schema, executor, activity, timeout and budget. The inspector adds
+and removes dependencies; cycle-forming connections are rejected. Renaming a node
+updates dependency IDs and activity input IDs while retaining other task metadata.
+Layout changes are view state and do not alter execution order.
+
+Built-in templates remain read-only and can be copied. New templates and skill or
+legacy-template conversion drafts use the same canvas; conversion source hashes
+are forwarded on save. Structure checks run in the editor, and the existing host
+validator checks complete capability, activity and budget rules before persistence.
+No run starts from the canvas. A lost save/delete response retains the draft and
+blocks another write until a fresh template read and explicit acknowledgement.
+
+Manual smoke: copy an existing template, select and rename a node, change its
+dependencies, zoom/fit and drag the canvas, save and reopen it. Check that executor,
+timeout, schema, budget and activity fields remain. Open the node editor and press
+Escape immediately; only that editor closes. Dirty editors ask before discarding.
+
 The accepted scope is the complete settings surface rendered in SwiftUI, with
 existing desktop command behavior, and an equivalent transport seam for WinUI3.
-The existing WebView client remains supported. Settings include the 20 top-level
-sections from `SETTINGS_NAV_GROUPS`, their editors, and their real actions.
-Hooks (`docs/hooks.md`) is WebView-only for now; `scripts/sync_native_design.py`
-leaves it out of the native navigation export.
+The existing WebView client remains supported. macOS settings include all 21
+top-level sections from `SETTINGS_NAV_GROUPS`, including Hooks. The shared
+navigation export now includes Hooks; WinUI's page implementation remains separate.
+
+The macOS Hooks page edits the existing built-in defaults and command hook list,
+and links to reviewer/specialist settings. Project hooks display the file path,
+events, matchers, commands and timeouts before explicit trust. Trust sends the
+exact reviewed SHA-256 to the existing host validator; changed files require a
+new review. Saving does not execute commands. Unknown writes require a fresh
+read and acknowledgement; a changed hook row cannot be overwritten from an old
+editor. Immediate Escape closes the hook editor before settings.
+
+Workflow output/input ports support both dragging and sequential selection.
+Double-click blank space to add a node at that canvas coordinate. Escape cancels
+a pending connection before closing the canvas. Fit preserves manually positioned
+nodes; Reset layout restores automatic stages. Positions, zoom and pan survive
+reopening on this device, keyed by database, project and template, with node IDs
+preserving positions across reordering. These local display preferences are not
+part of executable templates and are not synchronized to WebView or other devices.
 
 ## Architecture
 
@@ -28,6 +64,36 @@ Native settings never switch the WebView's active project or active session.
 
 No mutation is automatically retried following a timeout. The user can refresh
 to discover whether the previous operation completed.
+
+### macOS helper lifetime and opening the regular app
+
+The SwiftUI shell and regular app share one runtime. The macOS helper bundles
+the regular WebView frontend as well as the inert native command document.
+Opening the regular app while SwiftUI's helper is running loads that frontend,
+restores the Dock presence, and activates the workspace. Hidden native command
+contexts remain hidden. Existing native conversations continue in the same
+runtime; no second database owner is started and no active work is killed.
+
+A helper launched by SwiftUI receives an owner pipe. Quitting or force-quitting
+SwiftUI closes it and requests normal backend shutdown, including runtime and
+terminal cleanup. Closing the last window is not Quit: Finder/Dock can reopen
+the native workspace and the helper remains available. Once the helper has
+opened the regular workspace, it stays alive until that app is quit. A regular
+desktop host borrowed by SwiftUI is never owned or terminated by the client.
+Startup failure releases only the pipe for that launch.
+
+For #1520 on an older installed build, first finish work and quit both apps;
+an already-running old helper cannot gain this fix from reinstalling files.
+If it remains, quit that specific **Wisp Desktop Host** in Activity Monitor,
+then open the updated apps.
+
+Manual regression (use a disposable QA profile): open SwiftUI and a conversation,
+then open the matching regular app. Confirm a rendered workspace, no extra blank
+settings windows, and that SwiftUI still reads the same conversation. Quit SwiftUI;
+the regular workspace must remain usable. Repeat with SwiftUI only: close its
+last window and reopen from Dock, then Cmd+Q and confirm its owned helper exits.
+Repeat with the regular app opened first and confirm quitting SwiftUI leaves it
+running. Force-quit the SwiftUI-only shell to verify owner-pipe cleanup.
 
 ## Subscription accounts on macOS
 
@@ -135,8 +201,8 @@ without WinUI or a real backend process.
 
 ## Manual smoke procedure
 
-1. Build with `bash scripts/build_native_macos.sh`; open the resulting preview.
-2. Open Settings / Cmd+, and visit all 20 sections. Check backend errors, project
+1. Build with `bash scripts/build_native_macos.sh`; open the resulting app.
+2. Open Settings / Cmd+, and visit all 21 macOS sections. Check backend errors, project
    selection and consistency with the existing WebView values.
 3. In Models, open Add API access, press Escape immediately, and confirm only
    the editor closes. Open an editor's protocol menu; Escape closes the menu,
@@ -166,8 +232,8 @@ without WinUI or a real backend process.
 - Native settings configure the existing runtime's pet/browser integrations.
   WinUI conversations connect to the desktop host for sending and queueing;
   see [native-conversations.md](native-conversations.md).
-- Update actions update the desktop host. Distribution/updating of the SwiftUI
-  preview itself remains a separate packaging task.
+- Update actions update the desktop host. The SwiftUI app itself updates through
+  [manual installer downloads](app-updates.md#swiftui-alongside-the-macos-release).
 - Long operations show busy/result states. Update/download and conversion events
   are not streamed into detailed native progress bars yet.
 - Feishu/Weixin binding uses native QR rendering with an explicit status check.
@@ -190,3 +256,26 @@ and remaining platform/external-service acceptance, and
 for build prerequisites, host/database boundaries and manual smoke steps.
 
 成功刷新项目列表后，已关闭导入表单的旧错误会清除；只有项目列表读取失败才显示缓存数据说明。打开中的导入表单仍保留错误，刷新不会重试导入。
+
+### Windows notification sound preferences (2026-10-22)
+
+General → Edit Workspace and Notifications now exposes the shared independent
+task-sound switch, the host's platform sound catalog and an explicit Preview
+button. Preview plays the draft choice without saving it or enabling the switch.
+Save uses the existing `set_settings` payload and retains unrelated fields,
+including the separate desktop-banner switch. Playback failures keep the draft
+and are never retried automatically.
+
+The catalog and preview commands are advertised through the native settings
+allowlist. Older hosts keep General usable: missing sound fields show an upgrade
+hint, and missing commands hide the sound picker. A catalog read failure is
+visible without discarding other successfully loaded preferences. Saved IDs from
+another platform remain visible until explicitly changed and cannot be previewed
+unless the connected host advertises that exact ID. Empty catalogs offer no
+invented sounds. The picker uses the existing window Escape stack.
+
+This slice adds settings and explicit playback only. WinUI background task
+notification delivery, foreground suppression and notification-click navigation
+still need their own event/lifecycle integration; shared preferences do not
+establish that integration. See the dated audit in
+[Windows user testing](native-windows-user-testing.md#source-audit-and-sound-settings-2026-10-22).

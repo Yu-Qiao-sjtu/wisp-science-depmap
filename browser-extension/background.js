@@ -5,13 +5,15 @@
 importScripts(
   "session_config.js",
   "protocol.js",
+  "keepalive.js",
   "wait_tab.js",
   "wait_engine.js",
   "tab_ops.js",
   "scan_page.js",
   "downloads.js",
   "capture.js",
-  "chat_adapter.js"
+  "chat_adapter.js",
+  "side_relay.js"
 );
 
 var cfg = readBridgeConfig();
@@ -25,10 +27,16 @@ var waitEngine = createWaitEngine(chrome);
 var tabOps = createTabOps(chrome, new Set());
 var scans = pageScanFunctions();
 
+var KEEPALIVE_INTERVAL_MS = 20000;
+// Four unanswered pings. Wisp answers each JSON ping with a pong, so a healthy
+// socket sees inbound traffic at least every KEEPALIVE_INTERVAL_MS.
+var STALE_AFTER_MS = 90000;
+
 var socket = null;
 var keepAliveTimer = null;
 var lastError = "";
 var paused = false;
+var liveness = createLivenessTracker({ staleAfterMs: STALE_AFTER_MS });
 
 chrome.storage.local.get(["wisp_paused"], function (stored) {
   paused = !!stored.wisp_paused;
@@ -48,9 +56,34 @@ async function browserTabs() {
         title: tab.title || "",
         active: !!tab.active,
         windowId: tab.windowId,
+        groupId: Number.isInteger(tab.groupId) && tab.groupId >= 0 ? tab.groupId : undefined,
         managed: tabOps.isManaged(tab.id)
       };
     });
+}
+
+// One id per browser process. chrome.storage.session survives service-worker
+// restarts but not a browser restart, which is exactly when tab, window and
+// group ids stop meaning what Wisp remembers.
+var browserInstancePromise = null;
+function browserInstance() {
+  if (browserInstancePromise) return browserInstancePromise;
+  browserInstancePromise = (async function () {
+    try {
+      var area = chrome.storage.session;
+      if (!area) return "";
+      var stored = await area.get(["wisp_browser_instance"]);
+      if (stored && stored.wisp_browser_instance) return String(stored.wisp_browser_instance);
+      var fresh = (typeof crypto !== "undefined" && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+      await area.set({ wisp_browser_instance: fresh });
+      return fresh;
+    } catch (_) {
+      return "";
+    }
+  })();
+  return browserInstancePromise;
 }
 
 function send(message) {
@@ -60,48 +93,111 @@ function send(message) {
 }
 
 async function sendHandshake() {
-  send(handshakePayload(await browserTabs(), paused));
+  send(handshakePayload(await browserTabs(), paused, await browserInstance()));
+}
+
+// Drop a socket that still says OPEN but has not heard from Wisp in
+// STALE_AFTER_MS. send() on a half-open connection buffers silently and
+// onclose never fires by itself, so without this the one-minute reconnect
+// alarm would see readyState === OPEN forever and never rebuild the link.
+function dropStaleSocket() {
+  var stale = socket;
+  socket = null;
+  liveness.reset();
+  lastError = "Wisp stopped answering keepalive pings; reconnecting";
+  try { stale.close(); } catch (_) {}
+  connect();
 }
 
 function startKeepAlive() {
   clearInterval(keepAliveTimer);
   keepAliveTimer = setInterval(function () {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      send({ type: "ping", session: SESSION });
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (liveness.isStale()) {
+      dropStaleSocket();
+      return;
     }
-  }, 20000);
+    send({ type: "ping", session: SESSION });
+  }, KEEPALIVE_INTERVAL_MS);
 }
 
 function connect() {
   if (socket && socket.readyState <= WebSocket.OPEN) return;
+  var ws;
   try {
-    socket = new WebSocket(BRIDGE_URL);
+    ws = new WebSocket(BRIDGE_URL);
   } catch (error) {
     lastError = error.message;
     socket = null;
     return;
   }
-  socket.onopen = async function () {
+  socket = ws;
+  // Every handler checks it still owns `socket`: a stale socket dropped by
+  // dropStaleSocket() may fire onclose long after its replacement connected
+  // and must not clear the live one.
+  ws.onopen = async function () {
+    if (socket !== ws) return;
     lastError = "";
+    liveness.reset();
     startKeepAlive();
     await sendHandshake();
   };
-  socket.onmessage = async function (event) {
+  ws.onmessage = async function (event) {
+    if (socket !== ws) return;
+    liveness.touch();
     try {
       var request = JSON.parse(event.data);
-      if (request.id) await handleRequest(request);
+      if (request && request.type === "pong") return;
+      if (isSideMessage(request)) sideRelay.broadcast(request);
+      else if (request.id) await handleRequest(request);
     } catch (error) {
       lastError = error.message;
     }
   };
-  socket.onerror = function () {
+  ws.onerror = function () {
+    if (socket !== ws) return;
     lastError = "Cannot connect to Wisp on " + BRIDGE_URL.replace("ws://", "");
   };
-  socket.onclose = function () {
+  ws.onclose = function () {
+    if (socket !== ws) return;
     clearInterval(keepAliveTimer);
     keepAliveTimer = null;
     socket = null;
   };
+}
+
+// The side panel can wake a sleeping service worker, so give the socket a
+// moment to open before reporting Wisp as offline.
+async function socketReady() {
+  connect();
+  for (var waited = 0; waited < 3000; waited += 100) {
+    if (socket && socket.readyState === WebSocket.OPEN) return true;
+    await new Promise(function (resolve) { setTimeout(resolve, 100); });
+  }
+  return !!(socket && socket.readyState === WebSocket.OPEN);
+}
+
+var sideRelay = createSideRelay(chrome, { send: send, ready: socketReady, isScriptable: isScriptable });
+
+function openSidePanel(tab) {
+  if (!tab || !chrome.sidePanel) return;
+  // Must stay synchronous: Chrome only opens the panel inside the user gesture.
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch(function () {});
+}
+
+function createSideMenus() {
+  var zh = /^zh/i.test(chrome.i18n.getUILanguage());
+  var ignoreDuplicate = function () { void chrome.runtime.lastError; };
+  chrome.contextMenus.create({
+    id: "wisp-side-panel-page",
+    title: zh ? "用 Wisp 询问当前页面" : "Ask Wisp about this page",
+    contexts: ["page"]
+  }, ignoreDuplicate);
+  chrome.contextMenus.create({
+    id: "wisp-side-panel-selection",
+    title: zh ? "用 Wisp 询问“%s”" : "Ask Wisp about “%s”",
+    contexts: ["selection"]
+  }, ignoreDuplicate);
 }
 
 async function runPageCode(code) {
@@ -254,7 +350,10 @@ async function runCommand(tabId, command) {
       return await runWithCdp(command.tabId || tabId, command.method, command.params || {});
     case "tabs": {
       if (command.method === "create") {
-        return await tabOps.create(command.url, command.active);
+        return await tabOps.create(command.url, command.active, {
+          windowId: command.windowId,
+          group: command.group
+        });
       }
       if (command.method === "close") {
         var ids = (command.tabIds || [command.tabId || tabId]).filter(function (id) { return Number.isInteger(id); });
@@ -385,7 +484,17 @@ async function handleRequest(request) {
     var newTabs = [];
     for (var createdId of created) {
       var createdTab = await tabSnapshot(createdId);
-      if (createdTab) newTabs.push({ id: createdTab.id, url: createdTab.url, title: createdTab.title });
+      if (createdTab) {
+        newTabs.push({
+          id: createdTab.id,
+          url: createdTab.url,
+          title: createdTab.title,
+          windowId: createdTab.windowId,
+          // Lets Wisp tell a popup the page opened from a tab the user opened.
+          openerTabId: createdTab.openerTabId,
+          groupId: Number.isInteger(createdTab.groupId) && createdTab.groupId >= 0 ? createdTab.groupId : undefined
+        });
+      }
     }
     send({
       type: "result",
@@ -415,11 +524,21 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
 });
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+chrome.runtime.onInstalled.addListener(createSideMenus);
 chrome.tabs.onCreated.addListener(function () { sendHandshake(); });
 chrome.tabs.onRemoved.addListener(function () { sendHandshake(); });
 chrome.tabs.onActivated.addListener(function () { sendHandshake(); });
 chrome.tabs.onUpdated.addListener(function (_id, change) {
   if (change.status === "complete" || change.url) sendHandshake();
+});
+chrome.runtime.onConnect.addListener(function (port) {
+  if (port.name === "wisp_side_panel") sideRelay.attach(port);
+});
+chrome.commands.onCommand.addListener(function (command, tab) {
+  if (command === "open-side-panel") openSidePanel(tab);
+});
+chrome.contextMenus.onClicked.addListener(function (info, tab) {
+  if (String(info.menuItemId).indexOf("wisp-side-panel") === 0) openSidePanel(tab);
 });
 chrome.runtime.onMessage.addListener(function (message, _sender, reply) {
   if (message && message.type === "wisp_bridge_status") {

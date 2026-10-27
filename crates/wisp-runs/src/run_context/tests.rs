@@ -1594,10 +1594,208 @@ fn remote_compute_skill_uses_the_real_wisp_run_contract() {
         assert!(!skill.contains(stale), "stale API remains: {stale}");
     }
     assert!(skill.contains("wait_interrupted"));
+    assert!(skill.contains("wait_backgrounded"));
     assert!(skill.contains("call `monitor_run` again"));
     assert!(skill.contains("never call it repeatedly"));
     assert!(!skill.contains("ssh <alias>"));
-    assert!(skill.contains("Scheduler lifecycle is not implemented yet"));
+    // Scheduler jobs go through the bundled wrapper, never a bare submit.
+    assert!(!skill.contains("Scheduler lifecycle is not implemented yet"));
+    assert!(skill.contains("bash scheduler_job.sh"));
+    assert!(skill.contains(r#""scripts/scheduler_job.sh""#));
+    assert!(skill.contains("Never put a bare `sbatch`, `qsub`, or `bsub`"));
+}
+
+#[test]
+fn preflight_handshake_budget_scales_with_language_and_packages() {
+    let none: Vec<String> = Vec::new();
+    let six: Vec<String> = (0..6).map(|i| format!("pkg{i}")).collect();
+    let fifty: Vec<String> = (0..50).map(|i| format!("pkg{i}")).collect();
+
+    assert_eq!(
+        preflight_handshake_timeout("python", &none, None).as_secs(),
+        10
+    );
+    assert_eq!(
+        preflight_handshake_timeout("python", &six, None).as_secs(),
+        22
+    );
+    assert_eq!(
+        preflight_handshake_timeout("python", &fifty, None).as_secs(),
+        60
+    );
+    // R attaches every package; six Bioconductor packages get 75s, not 5s.
+    assert_eq!(preflight_handshake_timeout("r", &none, None).as_secs(), 15);
+    assert_eq!(preflight_handshake_timeout("r", &six, None).as_secs(), 75);
+    assert_eq!(
+        preflight_handshake_timeout("r", &fifty, None).as_secs(),
+        120
+    );
+    // An explicit budget wins and is clamped into 1..=600.
+    assert_eq!(
+        preflight_handshake_timeout("r", &six, Some(300)).as_secs(),
+        300
+    );
+    assert_eq!(preflight_handshake_timeout("r", &six, Some(0)).as_secs(), 1);
+    assert_eq!(
+        preflight_handshake_timeout("r", &six, Some(9_999)).as_secs(),
+        600
+    );
+}
+
+#[tokio::test]
+async fn r_preflight_handshake_gets_a_package_scaled_budget() {
+    use wisp_tools::Tool;
+    let tmp = std::env::temp_dir().join(format!(
+        "wisp_run_preflight_budget_{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let store = wisp_store::Store::open(&tmp.join("wisp.sqlite"))
+        .await
+        .unwrap();
+    store
+        .create_project("p", "project", &tmp.to_string_lossy())
+        .await
+        .unwrap();
+    let runner = Arc::new(FakeRunRunner::new(Ok(RunCommandOutput {
+        exit_code: 9,
+        stdout: "R version 4.4.1\n".into(),
+        stderr: "missing packages: limma".into(),
+    })));
+    let manager = RunManager::with_runner(runner.clone());
+    let tool = RunInContextTool::new(store.clone(), manager, "p".into(), None);
+
+    let result = tool
+        .run(
+            &serde_json::json!({
+                "context_id": "local",
+                "command": "Rscript analysis.R",
+                "preflight": {
+                    "language": "r",
+                    "packages": ["DESeq2", "edgeR", "limma", "SummarizedExperiment"]
+                }
+            }),
+            &RunToolTestEnv(tmp.clone()),
+        )
+        .await;
+
+    assert!(!result.success);
+    let timeouts = runner.timeouts.lock().unwrap();
+    assert_eq!(timeouts.len(), 1, "a non-timeout failure is not retried");
+    assert_eq!(timeouts[0], Duration::from_secs(15 + 10 * 4));
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[tokio::test]
+async fn cold_start_handshake_timeout_is_retried_once_with_double_budget() {
+    use wisp_tools::Tool;
+    let tmp =
+        std::env::temp_dir().join(format!("wisp_run_preflight_retry_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let store = wisp_store::Store::open(&tmp.join("wisp.sqlite"))
+        .await
+        .unwrap();
+    store
+        .create_project("p", "project", &tmp.to_string_lossy())
+        .await
+        .unwrap();
+    let runner = Arc::new(FakeRunRunner::new(Err(
+        "run_in_context timed out after 20s".into(),
+    )));
+    let manager = RunManager::with_runner(runner.clone());
+    let tool = RunInContextTool::new(store.clone(), manager, "p".into(), None);
+
+    let result = tool
+        .run(
+            &serde_json::json!({
+                "context_id": "local",
+                "command": "Rscript analysis.R",
+                "preflight": {
+                    "language": "r",
+                    "packages": ["DESeq2"],
+                    "timeout_secs": 20
+                }
+            }),
+            &RunToolTestEnv(tmp.clone()),
+        )
+        .await;
+
+    assert!(!result.success);
+    assert!(result.content.contains("\"run_submitted\":false"));
+    assert!(
+        result
+            .content
+            .contains("cold-start handshake timed out after 20s and again after 40s"),
+        "{}",
+        result.content
+    );
+    assert!(result.content.contains("preflight.timeout_secs"));
+    let timeouts = runner.timeouts.lock().unwrap();
+    assert_eq!(
+        *timeouts,
+        vec![Duration::from_secs(20), Duration::from_secs(40)],
+        "explicit budget, then one doubled retry"
+    );
+    let commands = runner.commands.lock().unwrap();
+    assert_eq!(commands.len(), 2);
+    assert!(commands
+        .iter()
+        .all(|command| command.script == "r interpreter/package preflight"));
+    assert!(store.list_runs_by_project("p").await.unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[tokio::test]
+async fn handshake_that_recovers_on_retry_passes_preflight() {
+    use wisp_tools::Tool;
+    let tmp =
+        std::env::temp_dir().join(format!("wisp_run_preflight_warm_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let store = wisp_store::Store::open(&tmp.join("wisp.sqlite"))
+        .await
+        .unwrap();
+    store
+        .create_project("p", "project", &tmp.to_string_lossy())
+        .await
+        .unwrap();
+    let runner = Arc::new(ScriptedRunRunner::new(vec![
+        Err("run_in_context timed out after 25s".into()),
+        ok_output("R version 4.4.1\n"),
+        ok_output("__WISP_PREPARED__\n"),
+        ok_output("__WISP_HANDLE__:token-will-be-replaced"),
+        ok_output(&poll_response("finished:0", "analysis complete", "")),
+    ]));
+    runner
+        .synthesize_launch_ack
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let manager = RunManager::with_runner(runner.clone());
+    let tool = RunInContextTool::new(store.clone(), manager, "p".into(), None);
+
+    let result = tool
+        .run(
+            &serde_json::json!({
+                "context_id": "local",
+                "command": "Rscript analysis.R",
+                "wait_for_completion": true,
+                "preflight": {
+                    "language": "r",
+                    "packages": ["DESeq2"]
+                }
+            }),
+            &RunToolTestEnv(tmp.clone()),
+        )
+        .await;
+
+    assert!(result.success, "{}", result.content);
+    let run: wisp_store::RunRecord = serde_json::from_str(&result.content).unwrap();
+    assert_eq!(run.status, wisp_store::RunStatus::Succeeded);
+    let snapshot: serde_json::Value = serde_json::from_str(&run.env_snapshot_json).unwrap();
+    assert_eq!(snapshot["preflight"]["status"], "passed");
+    let commands = runner.commands.lock().unwrap();
+    assert_eq!(commands[0].script, "r interpreter/package preflight");
+    assert_eq!(commands[1].script, "r interpreter/package preflight");
+    assert!(commands[2].script.starts_with("prepare "));
+    let _ = std::fs::remove_dir_all(tmp);
 }
 
 /// Single-response fake that records every command it receives, so tests can
@@ -1605,6 +1803,7 @@ fn remote_compute_skill_uses_the_real_wisp_run_contract() {
 struct FakeRunRunner {
     output: Result<RunCommandOutput, String>,
     commands: StdMutex<Vec<RunCommand>>,
+    timeouts: StdMutex<Vec<Duration>>,
 }
 
 impl FakeRunRunner {
@@ -1612,6 +1811,7 @@ impl FakeRunRunner {
         Self {
             output,
             commands: StdMutex::new(Vec::new()),
+            timeouts: StdMutex::new(Vec::new()),
         }
     }
 }
@@ -1744,9 +1944,10 @@ impl RunCommandRunner for FakeRunRunner {
     async fn run(
         &self,
         command: RunCommand,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<RunCommandOutput, String> {
         self.commands.lock().unwrap().push(command);
+        self.timeouts.lock().unwrap().push(timeout);
         self.output.clone()
     }
 }
@@ -1887,6 +2088,159 @@ async fn scripted_input_progress_does_not_consume_transfer_responses() {
             .unwrap_err(),
         "launch disconnected"
     );
+}
+
+#[tokio::test]
+async fn chosen_ssh_download_returns_before_transfer_and_preserves_conflicts_failures_and_cancellation(
+) {
+    struct HeldDownload {
+        mode: String,
+        started: tokio::sync::Notify,
+        gate: tokio::sync::Semaphore,
+        temporary: StdMutex<Option<PathBuf>>,
+    }
+    #[async_trait::async_trait]
+    impl RunCommandRunner for HeldDownload {
+        async fn run(&self, command: RunCommand, _: Duration) -> Result<RunCommandOutput, String> {
+            if command.script == "measure SSH download" {
+                return ok_output("__WISP_TRANSFER_SIZE__:12\n");
+            }
+            assert_eq!(command.program, "scp");
+            let destination = PathBuf::from(command.args.last().unwrap());
+            *self.temporary.lock().unwrap() = Some(destination.clone());
+            std::fs::write(&destination, b"partial").unwrap();
+            self.started.notify_one();
+            self.gate.acquire().await.unwrap().forget();
+            if self.mode == "failure" {
+                return Err("connection lost".into());
+            }
+            std::fs::write(
+                &destination,
+                if self.mode == "short" {
+                    &b"short"[..]
+                } else {
+                    &b"hello world\n"[..]
+                },
+            )
+            .unwrap();
+            ok_output("")
+        }
+    }
+    for mode in [
+        "success", "new", "conflict", "appeared", "failure", "short", "cancel",
+    ] {
+        let root =
+            std::env::temp_dir().join(format!("wisp-chosen-download-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let store = wisp_store::Store::open(&root.join("store.sqlite"))
+            .await
+            .unwrap();
+        store.create_project("p", "project", "").await.unwrap();
+        store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+        let runner = Arc::new(HeldDownload {
+            mode: mode.into(),
+            started: tokio::sync::Notify::new(),
+            gate: tokio::sync::Semaphore::new(0),
+            temporary: StdMutex::new(None),
+        });
+        let manager = RunManager::with_runner(runner.clone());
+        let mut context = wisp_store::ExecutionContext::new("ssh:CPU", "CPU").unwrap();
+        context.config_json = serde_json::json!({"alias":"fake.example"}).to_string();
+        context.last_probe_status = Some("ok".into());
+        let destination = root.join("results.csv");
+        if !matches!(mode, "new" | "appeared") {
+            std::fs::write(&destination, b"original").unwrap();
+        }
+        let run_id = manager
+            .submit_ssh_file_download(
+                &store,
+                "p",
+                Some("f"),
+                &context,
+                "/data/results.csv",
+                &destination,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), runner.started.notified())
+            .await
+            .unwrap();
+        let run = store.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.frame_id.as_deref(), Some("f"));
+        assert_eq!(run.context_id, "ssh:CPU");
+        assert!(run.command.as_deref().unwrap().contains("results.csv ->"));
+        assert_eq!(run.timeout_secs, Some(4 * 60 * 60));
+        assert_eq!(run.status, wisp_store::RunStatus::Running);
+        let temporary = runner.temporary.lock().unwrap().clone().unwrap();
+        assert_ne!(temporary, destination);
+        if matches!(mode, "new" | "appeared") {
+            assert!(!destination.exists());
+        } else {
+            assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        }
+        if matches!(mode, "conflict" | "appeared") {
+            std::fs::write(&destination, b"user's newer content").unwrap();
+        }
+        if mode == "cancel" {
+            manager.cancel(&store, &run_id).await.unwrap();
+        } else {
+            runner.gate.add_permits(1);
+        }
+        let expected_status = if mode == "cancel" {
+            wisp_store::RunStatus::Cancelled
+        } else if matches!(mode, "success" | "new") {
+            wisp_store::RunStatus::Succeeded
+        } else {
+            wisp_store::RunStatus::Failed
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if store.get_run(&run_id).await.unwrap().unwrap().status == expected_status
+                    && !temporary.parent().unwrap().exists()
+                    && !manager.has_in_flight_project(&store, "p").await.unwrap()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let expected = if matches!(mode, "success" | "new") {
+            &b"hello world\n"[..]
+        } else if matches!(mode, "conflict" | "appeared") {
+            &b"user's newer content"[..]
+        } else {
+            &b"original"[..]
+        };
+        assert_eq!(std::fs::read(&destination).unwrap(), expected, "{mode}");
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn chosen_ssh_download_rejects_relative_directory_and_symlink_destinations() {
+    let root = std::env::temp_dir().join(format!("wisp-download-target-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    assert!(ChosenDownloadTarget::new(Path::new("relative.csv")).is_err());
+    assert!(ChosenDownloadTarget::new(&root).is_err());
+    #[cfg(unix)]
+    {
+        std::fs::write(root.join("original.csv"), b"original").unwrap();
+        std::os::unix::fs::symlink(root.join("original.csv"), root.join("link.csv")).unwrap();
+        assert!(ChosenDownloadTarget::new(&root.join("link.csv")).is_err());
+        assert_eq!(
+            std::fs::read(root.join("original.csv")).unwrap(),
+            b"original"
+        );
+    }
+    assert!(!std::fs::read_dir(&root).unwrap().any(|item| item
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".wisp-download-")));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -2397,6 +2751,10 @@ fn windows_control_payloads_contain_process_identity_and_timeout() {
     let prepare = prepare_payload(&remote);
     assert!(prepare.contains("FromBase64String"));
     assert!(prepare.contains("__WISP_PREPARED__"));
+    // Windows PowerShell 5.1 reads BOM-less .ps1 as ANSI and mangles non-ASCII
+    // (e.g. Chinese) paths, so both scripts must be written with a UTF-8 BOM.
+    assert!(prepare.contains("UTF8Encoding($true)"), "{prepare}");
+    assert_eq!(prepare.matches(", $utf8Bom)").count(), 2, "{prepare}");
     let supervisor = String::from_utf8(
         base64::engine::general_purpose::STANDARD
             .decode(
@@ -2700,6 +3058,202 @@ impl RunCommandRunner for HarvestFakeRunner {
     }
 }
 
+struct PausedHarvestRunner {
+    inner: HarvestFakeRunner,
+    pull_started: tokio::sync::Semaphore,
+    pull_release: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl RunCommandRunner for PausedHarvestRunner {
+    async fn run(
+        &self,
+        command: RunCommand,
+        timeout: Duration,
+    ) -> Result<RunCommandOutput, String> {
+        if command.program == "scp" {
+            self.pull_started.add_permits(1);
+            self.pull_release.acquire().await.unwrap().forget();
+        }
+        self.inner.run(command, timeout).await
+    }
+}
+
+#[tokio::test]
+async fn reconciliation_during_automatic_and_manual_harvest_preserves_the_live_download() {
+    for automatic in [true, false] {
+        let tmp =
+            std::env::temp_dir().join(format!("wisp_harvest_reconcile_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let store = wisp_store::Store::open(&tmp.join("store.sqlite"))
+            .await
+            .unwrap();
+        store
+            .create_project("p", "Project", &tmp.to_string_lossy())
+            .await
+            .unwrap();
+        store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+        store
+            .upsert_execution_context(&harvest_test_context())
+            .await
+            .unwrap();
+        let bytes = b"gene\tvalue\nMYB36\t1\n".to_vec();
+        let runner = Arc::new(PausedHarvestRunner {
+            inner: HarvestFakeRunner {
+                manifest: format!(
+                    "__WISP_HARVEST__:file:0:{}:{}:results/out.tsv\n__WISP_HARVEST_DONE__\n",
+                    bytes.len(),
+                    sha256_hex_of(&bytes)
+                ),
+                files: vec![("files/results/out.tsv".into(), bytes.clone())],
+                commands: StdMutex::new(vec![]),
+                collect_hold: None,
+            },
+            pull_started: tokio::sync::Semaphore::new(0),
+            pull_release: tokio::sync::Semaphore::new(0),
+        });
+        let manager = RunManager::with_runner(runner.clone());
+        let remote = harvest_test_remote("compute", &tmp, vec![harvest_specs().remove(0)]);
+        let mut run = wisp_store::RunRecord::new(
+            "compute",
+            "p",
+            "ssh:gpu",
+            "Completed computation",
+            "ssh_direct",
+        );
+        run.frame_id = Some("f".into());
+        run.command = Some(remote.command.clone());
+        run.output_specs_json = serde_json::to_string(&remote.output_specs).unwrap();
+        run.remote_handle_json = Some(serde_json::to_string(&remote.handle).unwrap());
+        run.remote_workdir = Some("~/.wisp-science/runs/compute".into());
+        run.last_poll_error = Some("earlier poll or output download was interrupted".into());
+        if !automatic {
+            run.status = wisp_store::RunStatus::Succeeded;
+            run.exit_code = Some(0);
+        }
+        store.create_run(&run).await.unwrap();
+        if automatic {
+            assert!(store
+                .activate_run_lifecycle(
+                    "compute",
+                    wisp_store::RunStatus::Running,
+                    &manager.owner_id,
+                    ACTIVE_LEASE_SECS
+                )
+                .await
+                .unwrap());
+        }
+        let task = tokio::spawn({
+            let store = store.clone();
+            let manager = manager.clone();
+            async move {
+                if automatic {
+                    finish_remote_run(
+                        &store,
+                        manager.runner.as_ref(),
+                        &manager.owner_id,
+                        &remote,
+                        wisp_store::RunStatus::Succeeded,
+                        Some(0),
+                    )
+                    .await
+                } else {
+                    manager.harvest_run(&store, "compute").await.map(|_| ())
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(10), runner.pull_started.acquire())
+            .await
+            .expect("fake download did not start")
+            .unwrap()
+            .forget();
+        let transfer = store
+            .list_active_runs()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|run| run.kind == "file_transfer")
+            .unwrap();
+        assert!(!manager.active.lock().await.contains_key(&transfer.id));
+        // Force the exact race: recovery scans while this owner's SCP is pending.
+        assert_eq!(manager.reconcile_once(&store).await.unwrap(), 0);
+        let still_running = store.get_run(&transfer.id).await.unwrap().unwrap();
+        assert_eq!(still_running.status, wisp_store::RunStatus::Running);
+        assert!(still_running.last_poll_error.is_none());
+        let pending = store.get_run("compute").await.unwrap().unwrap();
+        assert!(pending.harvested_at.is_none());
+        assert_eq!(
+            pending.last_poll_error.as_deref(),
+            Some("earlier poll or output download was interrupted")
+        );
+        runner.pull_release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let finished = store.get_run("compute").await.unwrap().unwrap();
+        assert_eq!(finished.status, wisp_store::RunStatus::Succeeded);
+        assert_eq!(finished.exit_code, Some(0));
+        assert!(finished.harvested_at.is_some());
+        assert!(finished.last_poll_error.is_none());
+        assert_eq!(
+            store.get_run(&transfer.id).await.unwrap().unwrap().status,
+            wisp_store::RunStatus::Succeeded
+        );
+        assert_eq!(store.list_run_outputs("compute").await.unwrap().len(), 1);
+        assert_eq!(
+            std::fs::read(tmp.join("remote/gpu/compute/results/out.tsv")).unwrap(),
+            bytes
+        );
+        assert_eq!(store.list_runs_by_project("p").await.unwrap().len(), 2);
+        assert!(runner
+            .inner
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|command| !command.script.contains("launch")));
+        drop(manager);
+        drop(store);
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+}
+
+#[tokio::test]
+async fn recovery_still_fails_abandoned_harvest_and_preserves_the_compute_result() {
+    let tmp = std::env::temp_dir().join(format!("wisp_abandoned_harvest_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let store = seed_harvest_run(&tmp, "compute").await;
+    let mut transfer =
+        wisp_store::RunRecord::new("orphan", "p", "ssh:gpu", "Harvest", "file_transfer");
+    transfer.status = wisp_store::RunStatus::Running;
+    transfer.remote_handle_json = Some(
+        serde_json::to_string(&TransferHandle::Harvest {
+            parent_run_id: "compute".into(),
+        })
+        .unwrap(),
+    );
+    store.create_run(&transfer).await.unwrap();
+    let runner = Arc::new(ScriptedRunRunner::new(vec![]));
+    let manager = RunManager::with_runner(runner.clone());
+    manager.reconcile_once(&store).await.unwrap();
+    let orphan = store.get_run("orphan").await.unwrap().unwrap();
+    assert_eq!(orphan.status, wisp_store::RunStatus::Failed);
+    assert!(orphan
+        .last_poll_error
+        .unwrap()
+        .contains("retry harvest_run on compute"));
+    assert_eq!(
+        store.get_run("compute").await.unwrap().unwrap().status,
+        wisp_store::RunStatus::Succeeded
+    );
+    assert!(runner.commands.lock().unwrap().is_empty());
+    drop(manager);
+    drop(store);
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
 fn harvest_specs() -> Vec<crate::harvest::OutputSpec> {
     vec![
         crate::harvest::OutputSpec {
@@ -2892,6 +3446,10 @@ async fn ssh_harvest_checksum_mismatch_registers_nothing() {
     let tmp = std::env::temp_dir().join(format!("wisp_ssh_harvest_bad_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp).unwrap();
     let store = seed_harvest_run(&tmp, "run-bad").await;
+    store
+        .record_run_harvest_error("run-bad", "earlier output download was interrupted")
+        .await
+        .unwrap();
     let table = b"a\tb\n1\t2\n".to_vec();
     let manifest = format!(
         "__WISP_HARVEST__:file:0:{}:{}:results/out.tsv\n__WISP_HARVEST_DONE__\n",
@@ -2925,6 +3483,10 @@ async fn ssh_harvest_checksum_mismatch_registers_nothing() {
     assert!(error.contains("checksum mismatch"), "{error}");
     let run = store.get_run("run-bad").await.unwrap().unwrap();
     assert!(run.harvested_at.is_none());
+    assert_eq!(
+        run.last_poll_error.as_deref(),
+        Some("earlier output download was interrupted")
+    );
     assert!(store.list_run_outputs("run-bad").await.unwrap().is_empty());
     assert!(!tmp.join("remote/gpu/run-bad/results/out.tsv").exists());
     let transfers: Vec<_> = store
@@ -4785,6 +5347,73 @@ async fn download_run_files_registers_one_row_per_selection() {
         assert!(payload.contains("find read_partitions -type f"));
     }
 
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
+async fn server_inspection_reads_a_running_ssh_run_without_changing_it() {
+    let tmp = std::env::temp_dir().join(format!("wisp_inspect_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let store = wisp_store::Store::open(&tmp.join("wisp.sqlite"))
+        .await
+        .unwrap();
+    store
+        .create_project("p", "proj", &tmp.to_string_lossy())
+        .await
+        .unwrap();
+    store.create_frame("f", "p", "OPERON", "m").await.unwrap();
+    store
+        .upsert_execution_context(&harvest_test_context())
+        .await
+        .unwrap();
+    let mut run = wisp_store::RunRecord::new("run-open", "p", "ssh:gpu", "Remote", "ssh_direct");
+    run.frame_id = Some("f".into());
+    run.status = wisp_store::RunStatus::Running;
+    run.command = Some(
+        "set -e; cd /data2/proj/scotch-quant && python run.py --gtf='/data2/ref/it's.gtf' --out $OUT/x > /dev/null".into(),
+    );
+    let handle = RemoteRunHandle::SshDirect {
+        connection:
+            crate::ssh_hosts::SshConnection::from_execution_context(&harvest_test_context())
+                .unwrap(),
+        workdir: ".wisp-science/runs/run-open".into(),
+        token: "cleanup-token".into(),
+        inputs_staged: true,
+        pgid: Some(4242),
+        start_time: Some(99),
+    };
+    run.remote_workdir = Some(handle.display_workdir());
+    run.remote_handle_json = Some(serde_json::to_string(&handle).unwrap());
+    store.create_run(&run).await.unwrap();
+    let runner = Arc::new(ScriptedRunRunner::new(vec![ok_output(
+        "motd\n__WISP_INSPECT__\nprocesses in the Run process group: none running\n\
+         files written since the Run started: none found\n__WISP_INSPECT_DONE__\n",
+    )]));
+    let manager = RunManager::with_runner(runner.clone());
+
+    let report = manager.inspect_run_server(&store, &run).await.unwrap();
+    assert!(report.starts_with(
+        "looked for new files under (writable directories only): \
+         ~/.wisp-science/runs/run-open/inputs, /data2/proj/scotch-quant, /data2/ref/it, /dev/null\n"
+    ));
+    assert!(report.contains("none running"));
+    assert!(!report.contains("motd") && !report.contains("__WISP_"));
+
+    let commands = runner.commands.lock().unwrap();
+    let payload = commands[0].stdin.as_deref().unwrap();
+    // Read-only, scoped to this Run, and safe against quotes in the command.
+    assert!(payload.contains("cleanup-token"));
+    assert!(payload.contains("awk '$1 == 4242 "));
+    assert!(payload.contains(
+        r#"for dir in "$workdir/inputs" '/data2/proj/scotch-quant' '/data2/ref/it' '/dev/null'; do"#
+    ));
+    assert!(!payload.contains("$OUT"));
+    assert!(!payload.contains("rm ") && !payload.contains("kill"));
+    assert_eq!(
+        store.get_run("run-open").await.unwrap().unwrap().status,
+        wisp_store::RunStatus::Running
+    );
+    drop(commands);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

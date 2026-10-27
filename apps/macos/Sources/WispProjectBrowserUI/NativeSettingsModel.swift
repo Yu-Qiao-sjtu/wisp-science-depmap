@@ -5,7 +5,7 @@ import WispProjectBrowser
 enum NativeSettingsSection: String, CaseIterable, Identifiable {
     case general, network, session, appearance, pet, models
     case quickActions = "quick-actions"
-    case workflows, specialists, memory, skills, plugins, browser, connections, channels, credentials, permissions, environments, storage, usage
+    case hooks, workflows, specialists, memory, skills, plugins, browser, connections, channels, credentials, permissions, environments, storage, usage
     var id: String { rawValue }
     var title: String { localized(chineseTitle) }
     private var navigation: [String: String] { WispDesign.settingsNavigation[rawValue] ?? [:] }
@@ -19,6 +19,7 @@ enum NativeSettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general: return ["get_settings", "get_appearance_prefs", "get_bootstrap_status", "get_update_check_enabled"]
         case .network: return ["get_network_settings"]
+        case .hooks: return []
         case .session: return ["get_settings", "get_auto_review_enabled"]
         case .appearance: return ["get_appearance_prefs"]
         case .pet: return ["get_settings", "get_pet_runtime_status", "get_pet"]
@@ -59,9 +60,19 @@ final class NativeSettingsModel: ObservableObject {
     private var loadedProject: String?
     private var snapshots: [String: SettingsValue] = [:]
     let client: any NativeSettingsQuerying
+    let layoutScope: String?
+    private var hooksByProject: [String: NativeHooksModel] = [:]
+    func hooksModel() -> NativeHooksModel {
+        let key = projectID.map { "project:" + $0 } ?? "global"
+        if let model = hooksByProject[key] { return model }
+        let model = NativeHooksModel(client: client, projectID: projectID)
+        hooksByProject[key] = model
+        return model
+    }
 
-    init(client: any NativeSettingsQuerying, projectID: String?) {
+    init(client: any NativeSettingsQuerying, projectID: String?, layoutScope: String? = nil) {
         self.client = client
+        self.layoutScope = layoutScope
         self.projectID = projectID
     }
 
@@ -137,8 +148,8 @@ final class NativeSettingsModel: ObservableObject {
         })
     }
 
-    static let numberLabels = ["max_iter": "每轮最大 Agent 迭代次数", "auto_continue_limit": "自动继续次数上限", "semantic_compact_idle_hours": "空闲多久后提示语义压缩"]
-    static let numberDefaults: [String: Int64] = ["max_iter": 100, "auto_continue_limit": 10, "semantic_compact_idle_hours": 24]
+    static let numberLabels = ["max_iter": "每轮最大 Agent 迭代次数", "auto_continue_limit": "自动继续次数上限", "semantic_compact_idle_hours": "空闲多久后提示语义压缩", "auto_compact_percent": "自动压缩阈值（%）"]
+    static let numberDefaults: [String: Int64] = ["max_iter": 100, "auto_continue_limit": 10, "semantic_compact_idle_hours": 24, "auto_compact_percent": 80]
 
     func numberText(_ key: String) -> String {
         // Absent fields in an older host use the documented defaults; an edited
@@ -149,7 +160,8 @@ final class NativeSettingsModel: ObservableObject {
 
     func saveSettings() async {
         guard let document = values["get_settings"], !document.object.isEmpty, !loading, !busy else { return }
-        for key in ["max_iter", "auto_continue_limit", "semantic_compact_idle_hours"] {
+        // auto_compact_percent only needs to be a non-negative integer here; the host clamps it to 10–95.
+        for key in ["max_iter", "auto_continue_limit", "semantic_compact_idle_hours", "auto_compact_percent"] {
             guard let value = document.object[key] else { continue }
             let minimum: Int64 = key == "auto_continue_limit" ? 1 : 0
             guard case .integer(let number) = value, number >= minimum else {

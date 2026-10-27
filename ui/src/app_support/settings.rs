@@ -56,9 +56,9 @@ mod project_sync_backend_tests {
 #[cfg(test)]
 mod provider_form_tests {
     use super::{
-        apply_base_url_suggestions, endpoint_has_stored_key, new_model_form,
-        provider_entries_are_pristine, suggested_base_url_models, ModelProfile,
-        DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL,
+        apply_base_url_suggestions, endpoint_has_stored_key, endpoint_proxy, model_form_proxy,
+        new_model_form, profile_to_form, provider_entries_are_pristine, suggested_base_url_models,
+        ModelProfile, DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL,
     };
 
     fn profile(url: &str, has_key: bool) -> ModelProfile {
@@ -81,6 +81,7 @@ mod provider_form_tests {
             session_header_name: String::new(),
             supports_vision: false,
             use_for_vision: false,
+            use_for_expert: false,
             use_for_image_generation: false,
             image_generation_capable: false,
             image_size: String::new(),
@@ -91,6 +92,7 @@ mod provider_form_tests {
             video_duration_secs: None,
             video_aspect_ratio: None,
             video_resolution: None,
+            proxy_url: String::new(),
         }
     }
 
@@ -156,6 +158,9 @@ mod provider_form_tests {
     fn changing_url_refreshes_only_pristine_suggestions() {
         let mut form = new_model_form();
         assert!(provider_entries_are_pristine(&form));
+        form.entries[0].use_for_expert = true;
+        assert!(!provider_entries_are_pristine(&form));
+        form.entries[0].use_for_expert = false;
         apply_base_url_suggestions(&mut form, "https://api.kimi.com/coding/v1");
         assert_eq!(form.entries[0].model, "kimi-coding");
         form.entries[0].model = "k3-256k".into();
@@ -165,6 +170,13 @@ mod provider_form_tests {
         edited.api_url = "https://api.kimi.com/coding/v1/".into();
         assert!(!provider_entries_are_pristine(&edited));
         assert_eq!(edited.entries[0].model, before[0].model);
+    }
+
+    #[test]
+    fn editing_a_profile_preserves_expert_opt_in() {
+        let mut model = profile("https://example.test", true);
+        model.use_for_expert = true;
+        assert!(profile_to_form(&model).use_for_expert);
     }
 
     #[test]
@@ -187,6 +199,32 @@ mod provider_form_tests {
             &[chatgpt],
             "https://api.openai.com/v1"
         ));
+    }
+
+    #[test]
+    fn model_forms_show_the_endpoint_route_until_edited() {
+        let mut gateway = profile("https://gateway.test/v1", true);
+        gateway.proxy_url = "none".into();
+        let mut subscription = profile("https://api.x.ai/v1", true);
+        subscription.id = "grok".into();
+        subscription.provider = "xai_oauth".into();
+        subscription.proxy_url = "http://localhost:7890".into();
+        let models = vec![subscription, gateway];
+        // A new model on a routed endpoint shows that endpoint's route.
+        assert_eq!(
+            endpoint_proxy(&models, None, "https://GATEWAY.test"),
+            "none"
+        );
+        assert_eq!(endpoint_proxy(&models, None, "https://api.x.ai/v1"), "");
+        assert_eq!(endpoint_proxy(&models, None, "https://other.test"), "");
+        let mut form = profile_to_form(&models[1]);
+        assert_eq!(form.proxy_url, None);
+        assert_eq!(model_form_proxy(&models, &form), "none");
+        // Moving the form to another endpoint shows that endpoint's route.
+        form.api_url = "https://other.test/v1".into();
+        assert_eq!(model_form_proxy(&models, &form), "");
+        form.proxy_url = Some("socks5://localhost:1080".into());
+        assert_eq!(model_form_proxy(&models, &form), "socks5://localhost:1080");
     }
 }
 
@@ -237,6 +275,17 @@ pub(crate) mod tauri_args {
             payload["checkpointKind"] = json!(checkpoint_kind);
         }
         payload
+    }
+    pub fn render_session_excerpt(
+        session_id: &str,
+        start_user_index: usize,
+        end_user_index: usize,
+    ) -> Value {
+        json!({
+            "id": session_id,
+            "startUserIndex": start_user_index,
+            "endUserIndex": end_user_index,
+        })
     }
     pub fn start_exploration(
         source_frame_id: &str,
@@ -339,6 +388,12 @@ mod tauri_args_tests {
         assert_eq!(v["checkpointKind"], "before_user");
         assert!(v.get("session_id").is_none());
         assert!(v.get("user_index").is_none());
+
+        let v = tauri_args::render_session_excerpt("frame-1", 1, 3);
+        assert_eq!(v["id"], "frame-1");
+        assert_eq!(v["startUserIndex"], 1);
+        assert_eq!(v["endUserIndex"], 3);
+        assert!(v.get("start_user_index").is_none());
 
         let v = tauri_args::start_exploration("frame-1", Some(2), "Try A");
         assert_eq!(v["sourceFrameId"], "frame-1");
@@ -478,6 +533,7 @@ mod skill_filter_tests {
             managed: false,
             managed_by: None,
             dir: String::new(),
+            copies: vec![],
         }
     }
 
@@ -821,6 +877,7 @@ pub(crate) fn profile_to_form(m: &ModelProfile) -> ModelForm {
         session_header_name: m.session_header_name.clone(),
         supports_vision: m.supports_vision,
         use_for_vision: m.use_for_vision,
+        use_for_expert: m.use_for_expert,
         use_for_image_generation: m.use_for_image_generation,
         image_generation_capable: m.image_generation_capable,
         restore_chat_model: false,
@@ -832,6 +889,8 @@ pub(crate) fn profile_to_form(m: &ModelProfile) -> ModelForm {
         video_duration_secs: m.video_duration_secs,
         video_aspect_ratio: m.video_aspect_ratio.clone(),
         video_resolution: m.video_resolution.clone(),
+        proxy_url: None,
+        proxy_custom: false,
         entries: Vec::new(),
     }
 }
@@ -881,6 +940,7 @@ pub(crate) fn model_form_entry(
         model: model.into(),
         supports_vision: false,
         use_for_vision: false,
+        use_for_expert: false,
         use_for_image_generation: image,
         use_for_video_generation: video,
     }
@@ -933,6 +993,7 @@ pub(crate) fn provider_entries_are_pristine(form: &ModelForm) -> bool {
                 entry.model.trim(),
                 entry.supports_vision,
                 entry.use_for_vision,
+                entry.use_for_expert,
                 entry.use_for_image_generation,
             )
         })
@@ -947,6 +1008,7 @@ pub(crate) fn provider_entries_are_pristine(form: &ModelForm) -> bool {
                 entry.model.trim(),
                 entry.supports_vision,
                 entry.use_for_vision,
+                entry.use_for_expert,
                 entry.use_for_image_generation,
             )
         })
@@ -974,6 +1036,33 @@ pub(crate) fn endpoint_has_stored_key(models: &[ModelProfile], api_url: &str) ->
     models
         .iter()
         .any(|profile| shares_endpoint_key(profile, api_url))
+}
+
+/// Saved route of `api_url`'s endpoint, as `models::endpoint_proxy` keeps
+/// it: the edited profile's own while it stays on that endpoint, else that of
+/// another model already there. Empty inherits Settings → Network.
+pub(crate) fn endpoint_proxy(models: &[ModelProfile], id: Option<&str>, api_url: &str) -> String {
+    models
+        .iter()
+        .find(|profile| Some(profile.id.as_str()) == id && same_endpoint(&profile.api_url, api_url))
+        .or_else(|| {
+            models.iter().find(|profile| {
+                !matches!(
+                    profile.provider.as_str(),
+                    "openai_codex" | "openai_chatgpt" | "xai_oauth"
+                ) && same_endpoint(&profile.api_url, api_url)
+            })
+        })
+        .map(|profile| profile.proxy_url.clone())
+        .unwrap_or_default()
+}
+
+/// The route a model form shows and saves: its own choice once edited, else
+/// the endpoint's saved route.
+pub(crate) fn model_form_proxy(models: &[ModelProfile], form: &ModelForm) -> String {
+    form.proxy_url
+        .clone()
+        .unwrap_or_else(|| endpoint_proxy(models, form.id.as_deref(), &form.api_url))
 }
 
 pub(crate) fn sibling_profile_id<'a>(models: &'a [ModelProfile], api_url: &str) -> Option<&'a str> {
@@ -1328,23 +1417,7 @@ pub(crate) const CRED_GROUPS: &[CredGroup] = &[
             },
         ],
     },
-    CredGroup {
-        id: "typesafe",
-        name_key: "cred.typesafe.name",
-        about_key: "cred.typesafe.about",
-        configured_key: "cred.typesafe.configured",
-        unconfigured_key: "cred.typesafe.unconfigured",
-        hint_key: "cred.typesafe.hint",
-        links: &[CredLink {
-            label_key: "cred.typesafe.link",
-            url: "https://console.typesafe.ai",
-        }],
-        fields: &[CredField {
-            id: "typesafe_api_key",
-            label_key: "cred.typesafe_api_key.label",
-            secret: true,
-        }],
-    },
+    // TypeSafe's key lives in Settings → Models → Decision model.
 ];
 
 pub(crate) fn settings_subpage_label(
@@ -1397,6 +1470,8 @@ pub(crate) fn settings_subpage_label(
             "feishu" => t(loc, "channels.feishu.title").into(),
             "weixin" => t(loc, "channels.weixin.title").into(),
             "sticks3" => t(loc, "channels.device.title").into(),
+            "remote" => t(loc, "channels.remote.title").into(),
+            "lab" => t(loc, "channels.lab.title").into(),
             other => other.to_string(),
         }),
         _ => None,
@@ -1460,7 +1535,13 @@ pub(crate) fn build_conn_json(f: &ConnForm, assign_id: bool) -> serde_json::Valu
             "cwd": null
         })
     };
-    serde_json::json!({ "id": id, "name": f.name.trim(), "enabled": f.enabled, "transport": transport })
+    serde_json::json!({
+        "id": id,
+        "name": f.name.trim(),
+        "enabled": f.enabled,
+        "transport": transport,
+        "proxy_url": f.proxy_url.trim(),
+    })
 }
 
 pub(crate) fn conn_form_from_row(row: &ConnRow) -> ConnForm {
@@ -1478,6 +1559,8 @@ pub(crate) fn conn_form_from_row(row: &ConnRow) -> ConnForm {
             env: secret_fields_from_entries(env),
             auth: "none".into(),
             enabled: row.enabled,
+            proxy_url: row.proxy_url.clone(),
+            proxy_custom: false,
         },
         ConnTransport::Http { url, headers, auth } => ConnForm {
             id: Some(row.id.clone()),
@@ -1494,6 +1577,8 @@ pub(crate) fn conn_form_from_row(row: &ConnRow) -> ConnForm {
                 "none".into()
             },
             enabled: row.enabled,
+            proxy_url: row.proxy_url.clone(),
+            proxy_custom: false,
         },
     }
 }
@@ -1527,6 +1612,31 @@ mod mcp_secret_form_tests {
             serde_json::json!([{ "name": "Authorization" }])
         );
         assert!(json["transport"]["headers"][0].get("value").is_none());
+        assert_eq!(json["proxy_url"], "");
+    }
+
+    #[test]
+    fn connection_route_round_trips_through_the_form() {
+        let row = ConnRow {
+            id: "conn-1".into(),
+            name: "local".into(),
+            enabled: true,
+            transport: ConnTransport::Stdio {
+                command: "uvx".into(),
+                args: vec![],
+                env: vec![],
+                cwd: None,
+            },
+            proxy_url: "none".into(),
+        };
+        let mut form = conn_form_from_row(&row);
+        assert_eq!(form.proxy_url, "none");
+        assert!(!form.proxy_custom);
+        form.proxy_url = " http://localhost:7890 ".into();
+        assert_eq!(
+            build_conn_json(&form, false)["proxy_url"],
+            "http://localhost:7890"
+        );
     }
 
     #[test]
@@ -1540,6 +1650,7 @@ mod mcp_secret_form_tests {
                 headers: vec![McpSecretEntry::plaintext("Authorization", "secret-value")],
                 auth: "none".into(),
             },
+            proxy_url: String::new(),
         };
         let form = conn_form_from_row(&row);
         assert_eq!(form.headers[0].name, "Authorization");
@@ -1574,6 +1685,7 @@ mod mcp_secret_form_tests {
                 ],
                 cwd: None,
             },
+            proxy_url: String::new(),
         };
         let form = conn_form_from_row(&row);
         assert_eq!(form.env.len(), 2);

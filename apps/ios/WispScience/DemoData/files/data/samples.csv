@@ -1,0 +1,7 @@
+sample_id,group,replicate
+Control_01,control,1
+Control_02,control,2
+Control_03,control,3
+Treatment_01,treatment,1
+Treatment_02,treatment,2
+Treatment_03,treatment,3

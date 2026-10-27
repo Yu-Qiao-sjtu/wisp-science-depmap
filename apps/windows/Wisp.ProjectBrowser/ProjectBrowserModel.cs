@@ -20,8 +20,26 @@ public sealed class ProjectBrowserModel(IProjectBrowserClient client, string dat
     public string? Error { get; private set; }
     public string? SessionError { get; private set; }
     public DateTimeOffset? LastLoaded { get; private set; }
+    public int NavigationRevision => navigationGeneration;
     private int refreshGeneration, navigationGeneration, transcriptGeneration;
     private readonly CancellationTokenSource lifetime = new();
+
+    // Update only the accepted live conversation. The window refreshes labels
+    // in place; a status transition must not reload navigation or the composer.
+    public bool ApplySessionActivity(ConversationSnapshot snapshot)
+    {
+        if (snapshot.ProjectId != ActiveProjectId || snapshot.SessionId != ActiveSessionId
+            || snapshot.ActivityStatus is not ("running" or "needs_you" or "complete")) return false;
+        var changed = false;
+        BrowserSession Update(BrowserSession row)
+        {
+            if (row.ProjectId != snapshot.ProjectId || row.Id != snapshot.SessionId || row.Status == snapshot.ActivityStatus) return row;
+            changed = true; return row with { Status = snapshot.ActivityStatus };
+        }
+        Sessions = Sessions.Select(Update).ToArray();
+        RecentSessions = RecentSessions.Select(Update).ToArray();
+        return changed;
+    }
 
     public async Task RefreshAsync()
     {
@@ -51,6 +69,16 @@ public sealed class ProjectBrowserModel(IProjectBrowserClient client, string dat
         }
         catch (OperationCanceledException) { }
         finally { if (generation == refreshGeneration) { Loading = false; Notify(); } }
+    }
+
+    // A first launch can query the read-only service before the desktop host
+    // creates its database. Recover that failed read once the same host is ready,
+    // without reloading a populated browser or following a stale connection.
+    public Task RefreshAfterHostReadyAsync(string database)
+    {
+        if (lifetime.IsCancellationRequested || database != DatabasePath || Loading
+            || LastLoaded != null || Error == null) return Task.CompletedTask;
+        return RefreshAsync();
     }
 
     public async Task SetStarredAsync(string projectId, bool starred)

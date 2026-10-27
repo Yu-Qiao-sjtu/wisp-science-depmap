@@ -1,5 +1,54 @@
 # Model configuration
 
+## On-demand senior experts / 按需求助高级模型
+
+In **Settings → Models**, enable **Expert model (on-demand help)** on one or
+more chat profiles. API provider rows and existing subscription models support
+this setting. Existing profiles default to off. Adding an expert keeps the
+everyday default selected; marking the current default chooses another everyday
+model. Keep at least one ordinary chat profile. Experts are excluded from
+automatic default fallback and the ordinary delegation model pool. Explicitly
+choosing one as a conversation model or assigning it to another specialist still
+uses that model for that purpose.
+
+The built-in main Agent receives `consult_expert` when experts are configured.
+It can escalate during a turn when repeated attempts fail, evidence conflicts,
+or important reasoning remains uncertain, or when the user asks for expert help.
+The decision is made by the main Agent; this is not a deterministic failure
+counter or an end-of-turn hook. The tool requires the question, escalation reason,
+and a self-contained handoff with the user's goal, constraints, attempts and
+evidence. It also attaches a bounded transcript of the latest four user turns.
+The first expert in the Models list is the default; the Agent may name another
+configured expert profile. There is no fallback to an unmarked model.
+
+The expert is an isolated, tool-free subagent. It returns diagnosis and suggested
+checks to the parent, which evaluates the advice and continues under the user's
+existing instructions. The expert cannot run commands, change files, authorize
+actions, or start further subagents. Its context contains supplied text, not
+unsupplied files or image attachments. Its result and provider-reported token
+counts are saved in the tool transcript; **Agents** shows the escalation reason,
+model and advice. These token counts are not yet included in the Usage dashboard.
+
+Each main turn allows one paid consultation attempt, including provider failures.
+There is no automatic retry or model rotation. Input is capped at 24,000 bytes
+plus the expert instructions, output at 8,192 tokens, and both shrink to fit the
+profile and exact catalog limits. Requests time out after five minutes; **Stop**
+cancels the pending request. Cancellation cannot undo provider charges already
+incurred. Conversation subagents and external ACP agents do not receive this tool.
+Automatic review keeps its existing trigger and reviewer settings.
+
+在 **设置 → 模型** 中勾选 **高级专家模型（按需求助）**，可设置多个高价模型。
+主 Agent 在反复失败、证据冲突或关键推理拿不准时，可携带问题、求助原因、已尝试的方法
+和近期对话证据调用专家；也可以直接告诉 Agent「请高级专家帮忙诊断」。专家只给出诊断
+与建议，由主 Agent 判断后继续工作。每轮最多调用一次，失败不自动重试；可在 **Agents**
+面板查看模型和结果。新增专家不会替换日常默认模型，仍需保留至少一个普通对话模型。
+这与回合结束后的自动审查是两个独立功能。
+
+Manual smoke check (with a configured provider): mark a second chat profile as
+an expert, keep the ordinary model active, and ask the built-in Agent to consult
+it about a concrete problem. Check the tool result and Agents detail, then try
+Stop during a pending request. Reopen Settings to confirm the expert flag persists.
+
 In General settings, **Suggest follow-up questions** is enabled by default.
 After a completed reply, Wisp uses that conversation's current model to offer
 three optional next questions. That secondary call reads only the four most
@@ -43,6 +92,25 @@ inputs. Saving a max-output value above the documented ceiling is rejected with
 an inline error instead of failing mid-turn with a provider 400, and a context
 window above the ceiling is clamped down on save. Models absent from the
 catalog keep manually entered values.
+
+The catalog namespace is chosen from the Base URL host first, then from the
+protocol. Any host that models.dev lists as a provider's API base URL resolves
+to that provider's namespace automatically, so a gateway model such as
+`deepseek/deepseek-v4.1-flash` or `claude-opus-5-5` on Command Code
+(`https://api.commandcode.ai/provider/v1`) gets its documented ceilings and
+reasoning-effort levels without a Wisp release. When several namespaces share
+a host, the one whose published API path is the longest prefix of your Base
+URL path wins: `https://open.bigmodel.cn/api/coding/paas/v4` picks the Zhipu
+coding plan over the general `/api/paas/v4` namespace, and `api.z.ai`,
+`api.minimax.io`, `api.stepfun.com` and `ark.cn-beijing.volces.com` behave the
+same way. Loopback hosts (`localhost`, `127.0.0.1`) are never mapped, since
+every local server claims them. A small built-in table still covers hosts
+models.dev publishes no base URL for (Anthropic, OpenAI, xAI, DeepSeek,
+Moonshot) and public routes that differ from the published one (Kimi Code,
+OpenCode Go/Zen). Any other host only sees the namespace of its protocol
+(`openai` or `anthropic`). Side tasks that turn thinking off (Reader,
+Archivist, Recap) recognize DeepSeek models by host or by the last segment of
+a `vendor/deepseek-*` gateway ID.
 
 When editing a chat model, **Max output tokens** and **Context window** support
 continuous typing and deletion without losing focus. Changes take effect when
@@ -144,7 +212,7 @@ are listed here and in the conversation model picker, separately from API models
 Subscription is an authentication method, not a conversation protocol: Wisp
 manages the Responses connection and all other model parameters. The Models page
 has three peer tabs: API models, ACP Agents and Subscription accounts. Editing a
-subscription model only exposes its ID and alias; API and advanced controls are absent.
+subscription model exposes its ID, alias and on-demand expert flag; API and advanced controls are absent.
 Browser sign-in opens ChatGPT and listens on `127.0.0.1:1455` for the
 redirect. Enable device-code login in ChatGPT security settings or workspace
 permissions before using the one-time-code alternative when the browser
@@ -297,12 +365,18 @@ The built-in Reader used by `#` session references inherits that profile's
 model, not its reasoning effort. Retrieval turns disable DeepSeek thinking
 (the V4 default is thinking-on at `high`) and cap each transcript chunk well
 below a 1M context window so a long session from another project cannot fill
-a single JSON-extraction call. The first pass is still capped at 2048 output
-tokens; if the JSON is truncated or lands in a thinking field, Reader retries
-once with the profile's full output budget and parses the last complete JSON
-object from either field. If structured retrieval still fails, a head-and-tail
-excerpt of the cited transcript is injected so the main turn can still use the
-reference.
+a single JSON-extraction call. The first pass is capped at 2048 output tokens
+and asks for short summaries and exact quotes. Reader accepts a complete JSON
+result from either the answer or thinking field. If the result is missing,
+malformed, or incomplete, it retries the same transcript once with stricter
+length limits, even when the provider reports a normal stop or omits the stop
+reason. The retry uses the profile's full output budget when it is larger;
+otherwise it uses the original budget. Progress shows the retry within the
+same transcript chunk, and returned quotes still go through source grounding.
+Network/API errors, timeouts, and cancellation do not trigger this JSON retry.
+If all chunks still fail, a head-and-tail excerpt of the cited transcript is
+injected so the main turn can still use the reference; partial failures retain
+a coverage warning.
 
 Model profiles describe model access and capabilities for the **built-in Wisp
 agent**. External coding agents (Codex / Claude via ACP) are configured under
@@ -570,6 +644,31 @@ API keys are stored in the OS keyring. They are not stored in SQLite.
 
 The desktop app stores model profile metadata in `.wisp/wisp.sqlite`. Existing single-model installs are migrated into a `default` model profile the first time settings are loaded.
 
+## Decision model
+
+**Settings → Models → Decision model** configures one fast decision model: a
+model that answers typed yes/no, choice, and score questions with a calibrated
+probability per option instead of writing text, over the System One protocol
+(`POST /v1/systemone`). `map_items` offers its `decide` step and
+`desktop_autopilot` is registered only while one is enabled and usable.
+
+| Service | Defaults | Key |
+| --- | --- | --- |
+| TypeSafe Jev | `https://api.typesafe.ai`, `jev-latest`, 10 s | Required |
+| StartLux (hosted on Bamboo) | `https://api.bamboonode.dev`, `startlux-decision-27b-autothink`, 60 s | Required (a Bamboo key) |
+| StartLux (self-hosted) | `http://127.0.0.1:8090`, server's model, 60 s | Only if started with `--api-keys-file` |
+| Custom System One server | your URL (root, `/v1`, or full path) | Optional |
+
+Each service's key is kept separately in the OS keyring; a TypeSafe key saved
+under Credentials by an earlier version is the TypeSafe service's key and turns
+the decision model on until you change it. **Think mode** (`auto`, `never`,
+`always`) is sent only when set, for servers that think when unsure such as
+StartLux AutoThink; Instant models reject anything but the default or `never`.
+The timeout applies per request. **Test connection** asks one fixed question
+with the form's values and saves nothing. Saving rebuilds idle conversations'
+tools so the next turn uses the new endpoint. StartLux weights are licensed
+CC BY-NC 4.0; check the license before commercial use.
+
 ## Headless CLI
 
 The `wisp-science` headless CLI uses environment variables and supports the
@@ -591,6 +690,11 @@ $env:WISP_API_KEY  = "<your provider key>"
 $env:WISP_VISION_PROVIDER = "openai"
 $env:WISP_VISION_API_URL  = "https://api.openai.com/v1"
 $env:WISP_VISION_MODEL    = "gpt-4o-mini"
+# Optional decision model for map_items' decide step and desktop_autopilot:
+$env:TYPESAFE_API_KEY      = "<typesafe key>"
+# or any System One server instead, for example StartLux on Bamboo:
+# $env:WISP_DECISION_API_URL = "https://api.bamboonode.dev"
+# $env:WISP_DECISION_API_KEY = "<bamboo key>"
 cargo run -p wisp-cli
 ```
 

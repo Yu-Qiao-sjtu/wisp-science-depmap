@@ -17,7 +17,7 @@ struct NativeSettingsView: View {
 
     init(databaseURL: URL, projects: [ProjectSummary], projectID: String?, editProject: Bool = false, initialSection: NativeSettingsSection = .general, close: @escaping () -> Void) {
         self.projects = projects; self.close = close; self.editProject = editProject
-        let model = NativeSettingsModel(client: NativeSettingsClient(databaseURL: databaseURL, executableURL: nativeDesktopHostURL()), projectID: projectID ?? projects.first?.id)
+        let model = NativeSettingsModel(client: NativeSettingsClient(databaseURL: databaseURL, executableURL: nativeDesktopHostURL()), projectID: projectID ?? projects.first?.id, layoutScope: databaseURL.resolvingSymlinksInPath().standardizedFileURL.path)
         model.section = initialSection
         _state = StateObject(wrappedValue: model)
     }
@@ -41,7 +41,7 @@ struct NativeSettingsView: View {
                     }
                     Text(state.editor.map { localized($0.title) } ?? state.detailSection.map(localized) ?? state.section.title).font(WispDesign.font(size: state.editor == nil ? 20 : 14, weight: .semibold))
                     Spacer()
-                    if [.memory, .skills, .plugins, .permissions, .environments, .storage, .channels].contains(state.section) {
+                    if [.hooks, .memory, .skills, .plugins, .permissions, .environments, .storage, .channels].contains(state.section) {
                     Picker(localized("项目"), selection: Binding(get: { state.projectID }, set: { id in
                         if state.hasUnsavedChanges { pendingProject = id; changingProject = true; confirmLeave = true } else { state.projectID = id }
                     })) {
@@ -131,6 +131,7 @@ struct NativeSettingsView: View {
         switch state.section {
         case .general: general
         case .network: network
+        case .hooks: NativeHooksSettings(model: state.hooksModel(), openReviewer: { state.section = .specialists }).id(state.projectID)
         case .session: session
         case .appearance: appearancePane
         case .pet: pet
@@ -226,7 +227,8 @@ struct NativeSettingsView: View {
             NativePreferenceRow(title: "每轮自动继续次数上限", hint: "默认 10 次；达到上限后恢复现有的手动「继续执行」操作。") { number("auto_continue_limit").disabled(state.values["get_settings"]?["auto_continue"].bool != true) }
             Divider().padding(.vertical, 10)
             Text(localized("上下文管理")).font(WispDesign.font(size: 15, weight: .semibold))
-            NativePreferenceRow(title: "自动压缩过长对话", hint: "默认开启。每次模型调用前，当预估上下文达到 80% 时，Wisp 会先归档完整对话，再自动压缩。该路径先收工具输出，只有窗口仍然不够时才写语义摘要。") { settingToggle("auto_compact") }
+            NativePreferenceRow(title: "自动压缩过长对话", hint: "默认开启。每次模型调用前，当预估上下文达到下方阈值时，Wisp 会先归档完整对话，再自动压缩。该路径先收工具输出，只有窗口仍然不够时才写语义摘要。") { settingToggle("auto_compact") }
+            NativePreferenceRow(title: "自动压缩阈值（%）", hint: "默认 80。预估上下文占模型窗口的比例达到该值时，触发提醒和自动压缩。可设 10–95；数值越高，留给回复的空间越少。") { number("auto_compact_percent").disabled(state.values["get_settings"]?["auto_compact"].bool == false) }
             NativePreferenceRow(title: "切换模型时自动语义压缩", hint: "默认关闭。更换本对话模型后，把较早轮次折成摘要 checkpoint，让新模型从摘要而不是全量历史开始。") { settingToggle("semantic_compact_on_model_switch") }
             NativePreferenceRow(title: "空闲多久后提示语义压缩", hint: "默认 24 小时。重新打开空闲这么久的对话时，询问是否写语义摘要。0 表示不提示。") { number("semantic_compact_idle_hours") }
             Divider().padding(.vertical, 10)

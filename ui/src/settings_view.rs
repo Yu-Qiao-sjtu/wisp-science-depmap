@@ -3,16 +3,18 @@ use crate::app_support::{
     allow_drop, apply_base_url_suggestions, blank_conn_secret_field, build_conn_json,
     close_details_ancestor, compose_icon, conn_form_from_row, context_capability_summary,
     drag_session_id, endpoint_has_stored_key, focus_element_soon, format_relative_time,
-    import_custom_css_from_input, join_tags, js_error_text, model_form_entry, new_acp_form,
-    new_conn_form, new_model_form, profile_to_form, provider_entries_are_pristine,
+    import_custom_css_from_input, join_tags, js_error_text, model_form_entry, model_form_proxy,
+    new_acp_form, new_conn_form, new_model_form, profile_to_form, provider_entries_are_pristine,
     quick_action_label, reviewer_backend_key, reviewer_backend_label,
     reviewer_missing_acp_profile_id, set_reviewer_backend, settings_nav_entry_matches,
     settings_section_label, settings_subpage_label, show_toast, skill_matches_filter,
-    start_session_drag, DefaultAnalysisSelect, CRED_GROUPS, SETTINGS_NAV_GROUPS,
+    start_session_drag, DefaultAnalysisSelect, SpecialistTransfer, CRED_GROUPS,
+    SETTINGS_NAV_GROUPS,
 };
 use crate::bindings::{invoke, invoke_checked, is_mac, is_windows, open_external_url};
 use crate::dto::*;
 use crate::i18n::{localize_backend, set_document_lang, t, tf, use_locale, Locale};
+use crate::network_settings::{route_error, ProxyRouteField, SubscriptionRouteField};
 use crate::text::{
     dom_value, endpoint_host, event_target_checked, event_target_input, event_target_value,
     format_bytes, join_api_url,
@@ -89,6 +91,25 @@ fn SettingsNavigation(
                 }
             }}
         </nav>
+    }
+}
+
+/// The edited API endpoint's own network route.
+fn model_proxy_route(
+    model_form: RwSignal<Option<ModelForm>>,
+    models: RwSignal<Vec<ModelProfile>>,
+) -> impl IntoView {
+    view! {
+        <ProxyRouteField
+            value=Signal::derive(move || model_form.with(|form| form.as_ref().map(|form| model_form_proxy(&models.get(), form)).unwrap_or_default()))
+            custom=Signal::derive(move || model_form.with(|form| form.as_ref().is_some_and(|form| form.proxy_custom)))
+            on_change=Callback::new(move |(value, custom): (String, bool)| model_form.update(|form| if let Some(form) = form {
+                form.proxy_url = Some(value);
+                form.proxy_custom = custom;
+            }))
+            category="network.model"
+            hint="models.proxy_hint"
+            test_id="model-proxy" />
     }
 }
 
@@ -272,6 +293,11 @@ pub(super) enum DeleteConfirm {
         name: String,
         label: String,
     },
+    /// Deleting a project copy that another copy keeps available.
+    ProjectSkillCopy {
+        name: String,
+        label: String,
+    },
     /// Dropping a server: `detail` reports what would be abandoned there.
     Host {
         alias: String,
@@ -291,9 +317,22 @@ impl DeleteConfirm {
             | DeleteConfirm::Acp { label, .. }
             | DeleteConfirm::Plugin { label, .. }
             | DeleteConfirm::Skill { label, .. }
+            | DeleteConfirm::ProjectSkillCopy { label, .. }
             | DeleteConfirm::Host { label, .. }
             | DeleteConfirm::CodexAccount { label, .. } => label,
         }
+    }
+}
+
+/// Localized name for a catalog sound. macOS sound names are proper nouns and
+/// have no translation keys, so they keep the backend label.
+fn notification_sound_label(locale: Locale, sound: &NotificationSound) -> String {
+    let key = format!("notify_sound.{}", sound.id);
+    let text = t(locale, &key);
+    if text == key {
+        sound.label.clone()
+    } else {
+        text
     }
 }
 
@@ -734,7 +773,7 @@ fn blank_codex_login(provider: &str, profile_id: &str, model: &str, label: &str)
         } else if xai {
             "grok-4.6".into()
         } else {
-            "gpt-5.5".into()
+            "gpt-6.1-sol".into()
         },
         label: label.to_string(),
         status: "idle".into(),
@@ -1559,6 +1598,7 @@ pub(super) struct SettingsViewState {
     pub(super) conn_form: RwSignal<Option<ConnForm>>,
     pub(super) memory_selected: RwSignal<Option<String>>,
     pub(super) specialist_form: RwSignal<Option<Specialist>>,
+    pub(super) specialist_transfer: RwSignal<Option<SpecialistTransfer>>,
     pub(super) settings: RwSignal<Settings>,
     pub(super) bootstrap: RwSignal<Option<BootstrapStatus>>,
     pub(super) settings_message: RwSignal<Option<(bool, String)>>,
@@ -1940,6 +1980,288 @@ fn enqueue_locale_persist(locale: Locale) {
     });
 }
 
+/// One skill/connector whitelist in the import preview. `None` (inherit) and
+/// `Some([])` (allow none) read differently; missing entries are marked.
+fn specialist_whitelist_view(
+    locale: RwSignal<Locale>,
+    entries: Option<Vec<String>>,
+    missing: Vec<String>,
+    test_id: &'static str,
+) -> View {
+    match entries {
+        None => view! {
+            <span class="hint" data-testid=test_id>{move || t(locale.get(), "specialists.inherit")}</span>
+        }
+        .into_view(),
+        Some(list) if list.is_empty() => view! {
+            <span class="hint" data-testid=test_id>{move || t(locale.get(), "specialists.import.none_allowed")}</span>
+        }
+        .into_view(),
+        Some(list) => view! {
+            <ul class="specialist-transfer-list" data-testid=test_id>
+                {list.into_iter().map(|entry| {
+                    let absent = missing.contains(&entry);
+                    view! {
+                        <li class:missing=absent>
+                            <code>{entry}</code>
+                            {absent.then(|| view! {
+                                <small>{move || t(locale.get(), "specialists.import.missing")}</small>
+                            })}
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
+        }
+        .into_view(),
+    }
+}
+
+fn secret_kind_label(locale: Locale, kind: &str) -> String {
+    t(
+        locale,
+        match kind {
+            "private_key" => "specialists.secret.private_key",
+            "token_prefix" => "specialists.secret.token_prefix",
+            "bearer" => "specialists.secret.bearer",
+            _ => "specialists.secret.assignment",
+        },
+    )
+}
+
+/// The Specialists import preview / export secret warning. The preview shows
+/// the full instructions and needs an explicit "I reviewed this" before
+/// Import enables. Escape is handled by the Settings capture listener.
+fn specialist_transfer_dialog(
+    locale: RwSignal<Locale>,
+    transfer: RwSignal<Option<SpecialistTransfer>>,
+    settings_busy: RwSignal<bool>,
+    export_specialist: Callback<(String, bool)>,
+    confirm_import: Callback<()>,
+) -> impl IntoView {
+    // Keyed on the preview itself so toggling the checkbox or the model does
+    // not remount the dialog (and reset the instructions scroll position).
+    let import_preview = create_memo(move |_| {
+        transfer.with(|current| match current {
+            Some(SpecialistTransfer::Import { preview, .. }) => Some(preview.clone()),
+            _ => None,
+        })
+    });
+    let secret_warning = create_memo(move |_| {
+        transfer.with(|current| match current {
+            Some(SpecialistTransfer::SecretWarning { id, name, findings }) => {
+                Some((id.clone(), name.clone(), findings.clone()))
+            }
+            _ => None,
+        })
+    });
+    let import_model_id = move || {
+        transfer.with(|current| match current {
+            Some(SpecialistTransfer::Import { model_id, .. }) => model_id.clone(),
+            _ => String::new(),
+        })
+    };
+    let import_reviewed = move || {
+        transfer.with(|current| {
+            matches!(
+                current,
+                Some(SpecialistTransfer::Import { reviewed: true, .. })
+            )
+        })
+    };
+    let import_error = move || {
+        transfer.with(|current| match current {
+            Some(SpecialistTransfer::Import { error, .. }) => error.clone(),
+            _ => None,
+        })
+    };
+    let close = move || {
+        if !settings_busy.get_untracked() {
+            transfer.set(None);
+        }
+    };
+    view! {
+        {move || import_preview.get().map(|preview| {
+            let package = preview.package.clone();
+            let conflict = preview.name_conflict.clone();
+            let has_conflict = conflict.is_some();
+            let matches = preview.model_matches.clone();
+            let has_matches = !matches.is_empty();
+            let hint = package.model_hint.clone();
+            let any_missing = !preview.missing_skills.is_empty() || !preview.missing_connectors.is_empty();
+            let unchecked_skills = !preview.skills_checked
+                && package.skills.as_ref().is_some_and(|skills| !skills.is_empty());
+            let source = format!("{} · {}", preview.file_name, format_bytes(preview.bytes));
+            let instructions = package.instructions.clone();
+            let instructions_empty = instructions.trim().is_empty();
+            view! {
+                <div class="overlay" on:click=move |_| close()>
+                    <section class="modal specialist-transfer-dialog" role="dialog" aria-modal="true"
+                        aria-labelledby="specialist-import-title" data-testid="specialist-import-preview"
+                        on:click=|event| event.stop_propagation()>
+                        <div class="ps-head">
+                            <h2 id="specialist-import-title">{move || t(locale.get(), "specialists.import.title")}</h2>
+                            <button type="button" class="ps-close"
+                                title=move || t(locale.get(), "settings.cancel")
+                                aria-label=move || t(locale.get(), "settings.cancel")
+                                disabled=move || settings_busy.get()
+                                on:click=move |_| close()>{compose_icon("close")}</button>
+                        </div>
+                        <p class="hint">{move || t(locale.get(), "specialists.import.safety")}</p>
+                        {conflict.map(|conflict| view! {
+                            <p class="err" role="alert" data-testid="specialist-import-conflict">
+                                {move || tf(locale.get(), "specialists.import.conflict", &[("name", &conflict.name)])}
+                            </p>
+                        })}
+                        <dl class="specialist-transfer-fields">
+                            <dt>{move || t(locale.get(), "specialists.name")}</dt>
+                            <dd data-testid="specialist-import-name">{package.name.clone()}</dd>
+                            {(!package.description.trim().is_empty()).then(|| view! {
+                                <dt>{move || t(locale.get(), "specialists.description")}</dt>
+                                <dd>{package.description.clone()}</dd>
+                            })}
+                            <dt>{move || t(locale.get(), "specialists.import.source")}</dt>
+                            <dd>{source}</dd>
+                        </dl>
+                        <div class="specialist-transfer-section">
+                            <strong>{move || t(locale.get(), "specialists.instructions")}</strong>
+                            <pre class="specialist-transfer-instructions" tabindex="0"
+                                data-testid="specialist-import-instructions">{if instructions_empty {
+                                    t(locale.get_untracked(), "specialists.import.no_instructions")
+                                } else {
+                                    instructions
+                                }}</pre>
+                        </div>
+                        <div class="specialist-transfer-section">
+                            <strong>{move || t(locale.get(), "specialists.skills")}</strong>
+                            {specialist_whitelist_view(locale, package.skills.clone(), preview.missing_skills.clone(), "specialist-import-skills")}
+                            {unchecked_skills.then(|| view! {
+                                <span class="hint">{move || t(locale.get(), "specialists.import.skills_unchecked")}</span>
+                            })}
+                        </div>
+                        <div class="specialist-transfer-section">
+                            <strong>{move || t(locale.get(), "specialists.connectors")}</strong>
+                            {specialist_whitelist_view(locale, package.connectors.clone(), preview.missing_connectors.clone(), "specialist-import-connectors")}
+                        </div>
+                        {any_missing.then(|| view! {
+                            <p class="hint" data-testid="specialist-import-missing-hint">{move || t(locale.get(), "specialists.import.missing_hint")}</p>
+                        })}
+                        <div class="specialist-transfer-section">
+                            <strong>{move || t(locale.get(), "specialists.model")}</strong>
+                            {hint.map(|hint| view! {
+                                <span class="hint" data-testid="specialist-import-model-hint">
+                                    {move || tf(locale.get(), "specialists.import.model_hint", &[("provider", &hint.provider), ("model", &hint.model)])}
+                                </span>
+                            })}
+                            {if has_matches {
+                                view! {
+                                    <select data-testid="specialist-import-model"
+                                        aria-label=move || t(locale.get(), "specialists.model")
+                                        on:change=move |ev| {
+                                            let value = dom_value(&ev);
+                                            transfer.update(|current| {
+                                                if let Some(SpecialistTransfer::Import { model_id, .. }) = current {
+                                                    *model_id = value;
+                                                }
+                                            });
+                                        }>
+                                        <option value="" prop:selected=move || import_model_id().is_empty()>
+                                            {move || t(locale.get(), "specialists.model.follow")}
+                                        </option>
+                                        {matches.into_iter().map(|matched| {
+                                            let value = matched.id.clone();
+                                            let selected = matched.id.clone();
+                                            let label = format!("{} · {}", matched.label, matched.provider);
+                                            view! {
+                                                <option value=value prop:selected=move || import_model_id() == selected>{label}</option>
+                                            }
+                                        }).collect_view()}
+                                    </select>
+                                }.into_view()
+                            } else {
+                                view! {
+                                    <span class="hint" data-testid="specialist-import-model-follow">
+                                        {move || t(locale.get(), "specialists.import.model_follow")}
+                                    </span>
+                                }.into_view()
+                            }}
+                        </div>
+                        <label class="specialist-transfer-confirm">
+                            <input type="checkbox" data-testid="specialist-import-reviewed"
+                                prop:checked=import_reviewed
+                                disabled=has_conflict
+                                on:change=move |ev| {
+                                    let checked = event_target_checked(&ev);
+                                    transfer.update(|current| {
+                                        if let Some(SpecialistTransfer::Import { reviewed, .. }) = current {
+                                            *reviewed = checked;
+                                        }
+                                    });
+                                } />
+                            <span>{move || t(locale.get(), "specialists.import.reviewed")}</span>
+                        </label>
+                        {move || import_error().map(|message| view! {
+                            <p class="err" role="alert" data-testid="specialist-import-error">{message}</p>
+                        })}
+                        <div class="row">
+                            <button type="button" disabled=move || settings_busy.get() on:click=move |_| close()>
+                                {move || t(locale.get(), "settings.cancel")}
+                            </button>
+                            <button type="button" class="primary" data-testid="specialist-import-confirm"
+                                disabled=move || has_conflict || !import_reviewed() || settings_busy.get()
+                                on:click=move |_| confirm_import.call(())>
+                                {move || t(locale.get(), "specialists.import.confirm")}
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            }
+        })}
+        {move || secret_warning.get().map(|(id, name, findings)| view! {
+            <div class="overlay" on:click=move |_| close()>
+                <section class="modal specialist-transfer-dialog" role="alertdialog" aria-modal="true"
+                    aria-labelledby="specialist-secret-title" data-testid="specialist-export-warning"
+                    on:click=|event| event.stop_propagation()>
+                    <div class="ps-head">
+                        <h2 id="specialist-secret-title">{move || t(locale.get(), "specialists.export.secret_title")}</h2>
+                        <button type="button" class="ps-close"
+                            title=move || t(locale.get(), "settings.cancel")
+                            aria-label=move || t(locale.get(), "settings.cancel")
+                            disabled=move || settings_busy.get()
+                            on:click=move |_| close()>{compose_icon("close")}</button>
+                    </div>
+                    <p class="hint">{move || tf(locale.get(), "specialists.export.secret_body", &[("name", &name)])}</p>
+                    <ul class="specialist-transfer-list" data-testid="specialist-secret-findings">
+                        {findings.into_iter().map(|finding| {
+                            let line = finding.line.to_string();
+                            let kind = finding.kind;
+                            view! {
+                                <li>
+                                    <span>{move || {
+                                        let loc = locale.get();
+                                        let label = secret_kind_label(loc, &kind);
+                                        tf(loc, "specialists.export.secret_line", &[("line", &line), ("kind", &label)])
+                                    }}</span>
+                                    <code>{finding.excerpt}</code>
+                                </li>
+                            }
+                        }).collect_view()}
+                    </ul>
+                    <div class="row">
+                        <button type="button" disabled=move || settings_busy.get() on:click=move |_| close()>
+                            {move || t(locale.get(), "settings.cancel")}
+                        </button>
+                        <button type="button" class="primary" data-testid="specialist-export-anyway"
+                            disabled=move || settings_busy.get()
+                            on:click=move |_| export_specialist.call((id.clone(), true))>
+                            {move || t(locale.get(), "specialists.export.anyway")}
+                        </button>
+                    </div>
+                </section>
+            </div>
+        })}
+    }
+}
+
 #[component]
 pub(super) fn SettingsView(
     state: SettingsViewState,
@@ -1964,13 +2286,16 @@ pub(super) fn SettingsView(
     load_custom_conn_tools: Callback<ConnRow>,
     save_skill_tags: Callback<(String, String)>,
     set_visible_skills_enabled: Callback<bool>,
-    install_skill_from: Callback<String>,
+    install_skill_from: Callback<(String, String)>,
     install_plugin_from: Callback<(String, Option<String>)>,
     install_plugin_url: Callback<(String, String)>,
     set_plugin_enabled: Callback<(String, String, bool)>,
     use_plugin: Callback<(String, String, String, Vec<String>, bool)>,
     remove_plugin: Callback<(String, String)>,
     remove_specialist: Callback<String>,
+    export_specialist: Callback<(String, bool)>,
+    pick_specialist_import: Callback<()>,
+    confirm_specialist_import: Callback<()>,
     open_add_host: Callback<()>,
     edit_ssh_host: Callback<String>,
     import_ssh_hosts: Callback<()>,
@@ -1980,6 +2305,7 @@ pub(super) fn SettingsView(
     set_default_compute_resource: Callback<Option<String>>,
     open_terminal_session: Callback<TerminalSessionSummary>,
     save_auto_failure_analysis: Callback<AutoFailureAnalysisSettings>,
+    sync_settings_changed: Callback<()>,
 ) -> impl IntoView {
     let expanded_connector_tools = create_rw_signal(HashSet::<(String, String)>::new());
     let SettingsViewState {
@@ -2005,6 +2331,7 @@ pub(super) fn SettingsView(
         conn_form,
         memory_selected,
         specialist_form,
+        specialist_transfer,
         settings,
         bootstrap,
         settings_message,
@@ -2097,6 +2424,37 @@ pub(super) fn SettingsView(
     let browser_prefer_reason = create_rw_signal(String::new());
     let browser_auto_launch = create_rw_signal(true);
     let browser_auto_close_tabs = create_rw_signal(false);
+    // The platform's sound catalog for the notification-sound picker (#1595).
+    // It stays empty where the backend has no sounds, which hides the picker.
+    let notification_sounds = create_rw_signal(Vec::<NotificationSound>::new());
+    create_effect(move |_| {
+        if show_settings.get()
+            && settings_section.get() == "general"
+            && notification_sounds.with_untracked(Vec::is_empty)
+        {
+            spawn_local(async move {
+                if let Ok(value) =
+                    invoke_checked("list_notification_sounds", JsValue::UNDEFINED).await
+                {
+                    if let Ok(sounds) =
+                        serde_wasm_bindgen::from_value::<Vec<NotificationSound>>(value)
+                    {
+                        notification_sounds.set(sounds);
+                    }
+                }
+            });
+        }
+    });
+    // Plays the selected (possibly unsaved) sound, ignoring window focus and the switch.
+    let preview_notification_sound = move |_| {
+        let sound = settings.get_untracked().notification_sound;
+        spawn_local(async move {
+            let arg = to_value(&serde_json::json!({ "sound": sound })).unwrap();
+            if let Err(error) = invoke_checked("preview_notification_sound", arg).await {
+                settings_message.set(Some((false, js_error_text(error))));
+            }
+        });
+    };
     create_effect(move |_| {
         if show_settings.get() && settings_section.get() == "browser" {
             spawn_local(async move {
@@ -2287,6 +2645,23 @@ pub(super) fn SettingsView(
     let selected_skill = create_rw_signal(None::<String>);
     let skill_store_open = create_rw_signal(false);
     let skill_store_github = create_rw_signal(false);
+    // Add skill installs globally unless the user picks this project.
+    let skill_install_scope = create_rw_signal(String::from("global"));
+    let skill_install_locations = create_rw_signal(None::<SkillInstallLocations>);
+    create_effect(move |_| {
+        if !show_settings.get() || settings_section.get() != "skills" {
+            return;
+        }
+        spawn_local(async move {
+            if let Ok(value) = invoke_checked("skill_install_locations", JsValue::UNDEFINED).await {
+                if let Ok(locations) =
+                    serde_wasm_bindgen::from_value::<SkillInstallLocations>(value)
+                {
+                    skill_install_locations.set(Some(locations));
+                }
+            }
+        });
+    });
     create_effect(move |_| {
         if !show_settings.get() || settings_section.get() != "skills" {
             skill_store_open.set(false);
@@ -2308,6 +2683,13 @@ pub(super) fn SettingsView(
             .is_some_and(|form| is_subscription_provider(&form.provider))
     });
     let show_subscriptions = create_rw_signal(false);
+    let show_decision = create_rw_signal(false);
+    // Callers outside this view open the ACP tab by setting its signal alone.
+    create_effect(move |_| {
+        if show_acp_agents.get() {
+            show_decision.set(false);
+        }
+    });
     let codex_login = create_rw_signal(None::<CodexLoginForm>);
     // Only mount/unmount the page when it opens/closes, not on every keystroke or poll.
     let codex_login_open = create_memo(move |_| codex_login.get().is_some());
@@ -2506,6 +2888,14 @@ pub(super) fn SettingsView(
     // Specialist skill whitelist picker: search query + filtered results, so a
     // large skill library never renders as an unbounded checkbox list.
     let specialist_skill_query = create_rw_signal(String::new());
+    // Saved custom specialist open in the form, if any: only those export.
+    let specialist_export_id = create_memo(move |_| {
+        specialist_form.with(|form| {
+            form.as_ref()
+                .filter(|form| !form.id.is_empty() && !form.builtin)
+                .map(|form| form.id.clone())
+        })
+    });
     let specialist_filtered_skills = create_memo(move |_| {
         let query = specialist_skill_query.get();
         let query = query.trim().to_lowercase();
@@ -2531,6 +2921,15 @@ pub(super) fn SettingsView(
             || external_link_confirm.get_untracked().is_some()
         {
             return false;
+        }
+        // The specialist import preview / export warning sits above the
+        // Specialists page and its form. Keep it open while a save dialog or
+        // import is in flight, but never let Escape fall through to the page.
+        if specialist_transfer.get_untracked().is_some() {
+            if !settings_busy.get_untracked() {
+                specialist_transfer.set(None);
+            }
+            return true;
         }
         if joining.get_untracked() {
             joining.set(false);
@@ -2919,6 +3318,41 @@ pub(super) fn SettingsView(
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
+                        <div class="appearance-config-row notification-sound-row">
+                            <div>
+                                <strong id="general-notification-sound-label">{move || t(locale.get(), "settings.notification_sound")}</strong>
+                                <span>{move || t(locale.get(), "settings.notification_sound_hint")}</span>
+                                {move || {
+                                    let sounds = notification_sounds.get();
+                                    (!sounds.is_empty()).then(|| view! {
+                                        <div class="notification-sound-picker">
+                                            // Bind `selected` on the options, not `value` on the select (#431).
+                                            <select data-testid="notification-sound"
+                                                aria-label=move || t(locale.get(), "settings.notification_sound_choice")
+                                                on:change=move |ev| settings.update(|current| current.notification_sound = dom_value(&ev))>
+                                                {sounds.into_iter().map(|sound| {
+                                                    let value = sound.id.clone();
+                                                    let id = sound.id.clone();
+                                                    view! {
+                                                        <option value=value prop:selected=move || settings.get().notification_sound == id>
+                                                            {move || notification_sound_label(locale.get(), &sound)}
+                                                        </option>
+                                                    }
+                                                }).collect_view()}
+                                            </select>
+                                            <button type="button" data-testid="notification-sound-preview"
+                                                on:click=preview_notification_sound>{move || t(locale.get(), "settings.notification_sound_preview")}</button>
+                                        </div>
+                                    })
+                                }}
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" data-testid="notification-sound-enabled" aria-labelledby="general-notification-sound-label"
+                                    prop:checked=move || settings.get().notification_sound_enabled
+                                    on:change=move |ev| settings.update(|current| current.notification_sound_enabled = event_target_checked(&ev)) />
+                                <span class="toggle-track" aria-hidden="true"></span>
+                            </label>
+                        </div>
                         <div class="appearance-config-row">
                             <div>
                                 <strong id="general-update-check-label">{move || t(locale.get(), "settings.update_check")}</strong>
@@ -3016,6 +3450,17 @@ pub(super) fn SettingsView(
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
+                        <label class="session-number-field"><span>{move || t(locale.get(), "settings.auto_compact_percent")}</span>
+                            <input data-testid="auto-compact-percent" type="number" min="10" max="95" step="1"
+                                prop:disabled=move || !settings.get().auto_compact
+                                on:input=move |ev| settings.update(|current| {
+                                    if let Ok(value) = event_target_input(&ev).value().parse() {
+                                        current.auto_compact_percent = value;
+                                    }
+                                })
+                                prop:value=move || settings.get().auto_compact_percent.to_string() />
+                            <span class="settings-field-hint">{move || t(locale.get(), "settings.auto_compact_percent_hint")}</span>
+                        </label>
                         <div class="appearance-config-row">
                             <div>
                                 <strong>{move || t(locale.get(), "settings.semantic_compact_on_model_switch")}</strong>
@@ -3050,6 +3495,18 @@ pub(super) fn SettingsView(
                                 <input type="checkbox" data-testid="follow-up-questions-enabled" aria-label=move || t(locale.get(), "settings.follow_up_questions")
                                     prop:checked=move || settings.get().follow_up_questions
                                     on:change=move |ev| settings.update(|current| current.follow_up_questions = event_target_checked(&ev)) />
+                                <span class="toggle-track" aria-hidden="true"></span>
+                            </label>
+                        </div>
+                        <div class="appearance-config-row">
+                            <div>
+                                <strong>{move || t(locale.get(), "settings.show_tips")}</strong>
+                                <span>{move || t(locale.get(), "settings.show_tips_hint")}</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" data-testid="show-tips-enabled" aria-label=move || t(locale.get(), "settings.show_tips")
+                                    prop:checked=move || settings.get().show_tips
+                                    on:change=move |ev| settings.update(|current| current.show_tips = event_target_checked(&ev)) />
                                 <span class="toggle-track" aria-hidden="true"></span>
                             </label>
                         </div>
@@ -3307,6 +3764,13 @@ pub(super) fn SettingsView(
                         </div>
                     </div>
                 }.into_view())}
+                {specialist_transfer_dialog(
+                    locale,
+                    specialist_transfer,
+                    settings_busy,
+                    export_specialist,
+                    confirm_specialist_import,
+                )}
                 {move || joining.get().then(|| view! {
                     <div class="overlay project-sync-join-overlay">
                         <div class="modal project-sync-join-modal" role="dialog"
@@ -4113,6 +4577,13 @@ pub(super) fn SettingsView(
                                                 <input data-testid="subscription-model-label" prop:value=move || model_form.get().map(|f| f.label).unwrap_or_default()
                                                     on:input=move |ev| model_form.update(|f| if let Some(f)=f { f.label = event_target_value(&ev); }) />
                                             </label>
+                                            <label class="settings-check span-2">
+                                                <input type="checkbox" data-testid="use-for-expert" aria-describedby="subscription-expert-hint"
+                                                    prop:checked=move || model_form.get().is_some_and(|f| f.use_for_expert)
+                                                    on:change=move |ev| model_form.update(|f| if let Some(f)=f { f.use_for_expert = event_target_checked(&ev); }) />
+                                                <span>{move || t(locale.get(), "settings.use_for_expert")}</span>
+                                            </label>
+                                            <span id="subscription-expert-hint" class="hint span-2">{move || t(locale.get(), "settings.expert_hint")}</span>
                                         </div>
                                         {move || model_form_msg.get().map(|(ok, text)| view! { <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div> })}
                                         <div class="row settings-footer">
@@ -4507,6 +4978,17 @@ pub(super) fn SettingsView(
                                             })
                                         }}
                                         <div class="span-2 settings-form-grid model-capabilities">
+                                            <Show when=move || model_form.get().is_some_and(|f| !f.is_image_model() && !is_video_generation_model(&f.model) && !f.use_for_video_generation)>
+                                            <div class="model-capability span-2">
+                                                <label class="settings-check">
+                                                    <input type="checkbox" data-testid="use-for-expert" aria-describedby="model-expert-hint"
+                                                        prop:checked=move || model_form.get().is_some_and(|f| f.use_for_expert)
+                                                        on:change=move |ev| model_form.update(|f| if let Some(f)=f { f.use_for_expert = event_target_checked(&ev); }) />
+                                                    <span>{move || t(locale.get(), "settings.use_for_expert")}</span>
+                                                </label>
+                                                <span id="model-expert-hint" class="hint">{move || t(locale.get(), "settings.expert_hint")}</span>
+                                            </div>
+                                            </Show>
                                             <div class="model-capability span-2" role="group" aria-describedby="model-vision-hint">
                                             <div class="model-capability-checks">
                                             <label class="settings-check">
@@ -4573,7 +5055,7 @@ pub(super) fn SettingsView(
                                             }
                                         }}
                                     </div>
-                                    <Show when=move || model_form.get().is_some_and(|f| !is_managed_subscription(&f.provider))>{model_advanced_options(locale, model_form)}</Show>
+                                    <Show when=move || model_form.get().is_some_and(|f| !is_managed_subscription(&f.provider))>{model_proxy_route(model_form, models)}{model_advanced_options(locale, model_form)}</Show>
                                     <Show when=move || model_form.get().is_some_and(|f| f.restore_chat_model)>
                                         <p class="hint" data-testid="restore-chat-hint">{move || t(locale.get(), "settings.restore_chat_hint")}</p>
                                     </Show>
@@ -4633,6 +5115,7 @@ pub(super) fn SettingsView(
                                         }}
                                     </div>
                                     <div class="provider-models" data-testid="provider-models">
+                                        <p class="hint" id="provider-expert-hint">{move || t(locale.get(), "settings.expert_hint")}</p>
                                         <div class="provider-models-head">
                                             <strong>{move || t(locale.get(), "models.entries")}</strong>
                                             <span class="hint">{move || t(locale.get(), "models.entries_hint")}</span>
@@ -4802,6 +5285,21 @@ pub(super) fn SettingsView(
                                                                 } else {
                                                                     view! {
                                                             <label class="settings-check">
+                                                                <input type="checkbox" data-testid="provider-use-for-expert" aria-describedby="provider-expert-hint"
+                                                                    prop:checked=move || model_form.get()
+                                                                        .and_then(|f| f.entries.into_iter().find(|e| e.row_id == row_id))
+                                                                        .is_some_and(|e| e.use_for_expert)
+                                                                    on:change=move |ev| {
+                                                                        let checked = event_target_checked(&ev);
+                                                                        model_form.update(|f| if let Some(f)=f {
+                                                                            if let Some(e) = f.entries.iter_mut().find(|e| e.row_id == row_id) {
+                                                                                e.use_for_expert = checked;
+                                                                            }
+                                                                        });
+                                                                    } />
+                                                                <span>{move || t(locale.get(), "settings.use_for_expert")}</span>
+                                                            </label>
+                                                            <label class="settings-check">
                                                                 <input type="checkbox"
                                                                     prop:checked=move || model_form.get()
                                                                         .and_then(|f| f.entries.into_iter().find(|e| e.row_id == row_id))
@@ -4898,6 +5396,7 @@ pub(super) fn SettingsView(
                                             {move || t(locale.get(), "models.add_entry")}
                                         </button>
                                     </div>
+                                    {model_proxy_route(model_form, models)}
                                     {model_advanced_options(locale, model_form)}
                                     {move || model_form_msg.get().map(|(ok, text)| view! {
                                         <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
@@ -4917,10 +5416,10 @@ pub(super) fn SettingsView(
                             <div class="settings-toolbar settings-toolbar-end model-category-toolbar">
                                 <div class="settings-category-tabs" role="tablist" aria-label=move || t(locale.get(), "models.categories")>
                                     <button type="button" role="tab" class="settings-category-tab"
-                                        class:active=move || !show_acp_agents.get() && !show_subscriptions.get()
-                                        aria-selected=move || (!show_acp_agents.get() && !show_subscriptions.get()).to_string()
+                                        class:active=move || !show_acp_agents.get() && !show_subscriptions.get() && !show_decision.get()
+                                        aria-selected=move || (!show_acp_agents.get() && !show_subscriptions.get() && !show_decision.get()).to_string()
                                         data-testid="models-category-http"
-                                        on:click=move |_| { show_acp_agents.set(false); show_subscriptions.set(false); }>
+                                        on:click=move |_| { show_acp_agents.set(false); show_subscriptions.set(false); show_decision.set(false); }>
                                         {move || {
                                             let n = models.get().iter().filter(|m| !is_subscription_provider(&m.provider)).count();
                                             format!("{} ({n})", t(locale.get(), "models.category.http"))
@@ -4930,7 +5429,7 @@ pub(super) fn SettingsView(
                                         class:active=move || show_acp_agents.get()
                                         aria-selected=move || show_acp_agents.get().to_string()
                                         data-testid="open-acp-agents-from-settings"
-                                        on:click=move |_| { show_acp_agents.set(true); show_subscriptions.set(false); }>
+                                        on:click=move |_| { show_acp_agents.set(true); show_subscriptions.set(false); show_decision.set(false); }>
                                         {move || {
                                             let n = acp_agents.get().len();
                                             format!("{} ({n})", t(locale.get(), "models.acp_open"))
@@ -4940,11 +5439,18 @@ pub(super) fn SettingsView(
                                         class:active=move || show_subscriptions.get()
                                         aria-selected=move || show_subscriptions.get().to_string()
                                         data-testid="models-category-subscriptions"
-                                        on:click=move |_| { show_acp_agents.set(false); show_subscriptions.set(true); }>
+                                        on:click=move |_| { show_acp_agents.set(false); show_subscriptions.set(true); show_decision.set(false); }>
                                         {move || t(locale.get(), "settings.nav.subscriptions")}
                                     </button>
+                                    <button type="button" role="tab" class="settings-category-tab"
+                                        class:active=move || show_decision.get()
+                                        aria-selected=move || show_decision.get().to_string()
+                                        data-testid="models-category-decision"
+                                        on:click=move |_| { show_acp_agents.set(false); show_subscriptions.set(false); show_decision.set(true); }>
+                                        {move || t(locale.get(), "models.category.decision")}
+                                    </button>
                                 </div>
-                                <div class="settings-toolbar-actions" style:display=move || if show_subscriptions.get() { "none" } else { "" }>
+                                <div class="settings-toolbar-actions" style:display=move || if show_subscriptions.get() || show_decision.get() { "none" } else { "" }>
                                     {move || if show_acp_agents.get() {
                                         view! {
                                             <button type="button" class="settings-add-btn" data-testid="add-acp-agent-settings" on:click=move |_| {
@@ -4970,7 +5476,9 @@ pub(super) fn SettingsView(
                                     }}
                                 </div>
                             </div>
-                            {move || if show_subscriptions.get() {
+                            {move || if show_decision.get() {
+                                view! { <crate::decision_model_settings::DecisionModelSettingsView /> }.into_view()
+                            } else if show_subscriptions.get() {
                                 view! {
                                     <div class="subscription-settings" data-testid="subscriptions-page">
                                         <p class="hint">{move || t(locale.get(), "subscriptions.desc")}</p>
@@ -5002,18 +5510,20 @@ pub(super) fn SettingsView(
                                                             open_codex_login.call((provider.into(), String::new(), String::new(), String::new(), false));
                                                         }>{move || t(locale.get(), "subscriptions.add_model")}</button>
                                                     </div>
+                                                    <SubscriptionRouteField provider=provider />
                                                     {(provider == "codex").then(|| codex_accounts_panel(locale, codex_accounts, codex_usage, codex_account_msg, settings_busy, delete_confirm, load_codex_usage))}
                                                     <div class="subscription-models">
                                                         <Show when=move || !models.get().iter().any(|m| settings_provider_value(&m.provider) == profile_provider)>
                                                             <p class="hint">{move || t(locale.get(), "subscriptions.empty")}</p>
                                                         </Show>
-                                                        <For each=move || { models.get().into_iter().filter(|m| settings_provider_value(&m.provider) == profile_provider).collect::<Vec<_>>() } key=|m| (m.id.clone(), m.active, m.label.clone(), m.model.clone()) let:m>
+                                                        <For each=move || { models.get().into_iter().filter(|m| settings_provider_value(&m.provider) == profile_provider).collect::<Vec<_>>() } key=|m| (m.id.clone(), m.active, m.label.clone(), m.model.clone(), m.use_for_expert) let:m>
                                                             {let edit = m.clone(); let pick = m.id.clone(); let delete = m.clone(); view! {
                                                                 <div class="subscription-model-row" data-testid="subscription-model">
                                                                     <button type="button" class="subscription-model-edit" on:click=move |_| {
                                                                         model_form.set(Some(profile_to_form(&edit)));
                                                                         model_form_key.set(String::new()); model_form_msg.set(None);
                                                                     }><strong>{m.label}</strong><span class="hint">{m.model}</span></button>
+                                                                    {m.use_for_expert.then(|| view! { <span class="settings-cap-badge" data-testid="expert-role-badge">{move || t(locale.get(), "models.capability.expert")}</span> })}
                                                                     {if m.active { view! { <span class="settings-model-default">{move || t(locale.get(), "models.default")}</span> }.into_view() } else { view! {
                                                                         <button type="button" disabled=move || settings_busy.get() on:click=move |_| {
                                                                             let id = pick.clone(); settings_busy.set(true);
@@ -5025,10 +5535,13 @@ pub(super) fn SettingsView(
                                                                                 settings_busy.set(false);
                                                                             });
                                                                         }>{move || t(locale.get(), "models.use")}</button>
-                                                                        <button type="button" title=move || t(locale.get(), "models.remove") on:click=move |_| {
+                                                                    }.into_view()}}
+                                                                    // The default model is removable too (remove_model falls back to another chat model); only the last chat model is not.
+                                                                    {move || models.with(|list| list.iter().any(|o| o.id != delete.id && o.is_chat_model())).then(|| { let delete = delete.clone(); view! {
+                                                                        <button type="button" data-testid="remove-subscription-model" title=move || t(locale.get(), "models.remove") on:click=move |_| {
                                                                             delete_confirm.set(Some(DeleteConfirm::Model { id: delete.id.clone(), label: delete.label.clone() }));
                                                                         }>{compose_icon("close")}</button>
-                                                                    }.into_view()}}
+                                                                    }})}
                                                                 </div>
                                                             }}
                                                         </For>
@@ -5198,7 +5711,7 @@ pub(super) fn SettingsView(
                                         }).collect_view()}
                                     </div>
                                     <div class="settings-list">
-                                        <For each=move || { models.get().into_iter().filter(|m| !is_subscription_provider(&m.provider)).collect::<Vec<_>>() } key=|m| (m.id.clone(), m.active) let:m>
+                                        <For each=move || { models.get().into_iter().filter(|m| !is_subscription_provider(&m.provider)).collect::<Vec<_>>() } key=|m| (m.id.clone(), m.active, m.use_for_expert) let:m>
                                             {
                                                 let pick_id = m.id.clone();
                                                 let del_id = m.id.clone();
@@ -5277,6 +5790,7 @@ pub(super) fn SettingsView(
                                                             <span class="settings-list-title">
                                                                 {m.label.clone()}
                                                                 {m.use_for_vision.then(|| view! { <span class="settings-cap-badge">{move || t(locale.get(), "models.capability.vision")}</span> })}
+                                                                {m.use_for_expert.then(|| view! { <span class="settings-cap-badge" data-testid="expert-role-badge">{move || t(locale.get(), "models.capability.expert")}</span> })}
                                                                 {(m.image_generation_capable || m.use_for_image_generation || is_image_generation_model(&m.model)).then(|| view! {
                                                                     <span class="settings-cap-badge" data-testid="image-role-badge">{move || t(locale.get(), "models.capability.image_only")}</span>
                                                                 })}
@@ -5895,6 +6409,15 @@ pub(super) fn SettingsView(
                                                 </button>
                                             }
                                         })}
+                                        {move || specialist_export_id.get().map(|id| view! {
+                                            <button type="button" class="specialist-export-button" data-testid="specialist-export-form"
+                                                title=move || t(locale.get(), "specialists.export.saved_hint")
+                                                disabled=move || settings_busy.get()
+                                                on:click=move |_| export_specialist.call((id.clone(), false))>
+                                                {compose_icon("download")}
+                                                <span>{move || t(locale.get(), "specialists.export")}</span>
+                                            </button>
+                                        })}
                                         <button type="button" disabled=move || settings_busy.get() on:click=move |_| close_settings_subpage.call(())>{move || t(locale.get(), "settings.cancel")}</button>
                                             <button type="button" class="primary" disabled=move || settings_busy.get() on:click=move |ev| save_specialist_form.call(ev)>{move || t(locale.get(), "settings.save")}</button>
                                     </div>
@@ -5932,8 +6455,19 @@ pub(super) fn SettingsView(
                                         <button type="button" on:click=move |ev| start_specialist_chat.call(ev)>
                                         {move || t(locale.get(), "specialists.add.chat")}
                                     </button>
+                                    <button type="button" data-testid="specialist-import"
+                                        disabled=move || settings_busy.get()
+                                        on:click=move |ev| {
+                                            close_details_ancestor(&ev);
+                                            pick_specialist_import.call(());
+                                        }>{move || t(locale.get(), "specialists.add.import")}</button>
                                 </details>
                             </div>
+                            {move || settings_message.get().map(|(ok, text)| view! {
+                                <div class="settings-status" data-testid="specialists-status"
+                                    class:ok=move || ok
+                                    class:fail=move || !ok>{text}</div>
+                            })}
                             <div class="conn-group-label">{move || t(locale.get(), "specialists.builtin")}</div>
                             <div class="settings-list">
                                 <For each=move || { specialists.get().into_iter().filter(|s| s.builtin).collect::<Vec<_>>() } key=|s| s.id.clone() let:s>
@@ -5966,6 +6500,7 @@ pub(super) fn SettingsView(
                                     {
                                         let edit = s.clone();
                                         let del_id = s.id.clone();
+                                        let export_id = s.id.clone();
                                         view! {
                                             <div class="settings-list-row settings-list-row-link"
                                                 on:click=move |_| {
@@ -5980,6 +6515,14 @@ pub(super) fn SettingsView(
                                                     })}
                                                 </div>
                                                 <div class="settings-list-actions">
+                                                    <button class="settings-list-export" type="button" data-testid="specialist-export"
+                                                        title=move || t(locale.get(), "specialists.export")
+                                                        aria-label=move || t(locale.get(), "specialists.export")
+                                                        disabled=move || settings_busy.get()
+                                                        on:click=move |ev| {
+                                                            ev.stop_propagation();
+                                                            export_specialist.call((export_id.clone(), false));
+                                                        }>{compose_icon("download")}</button>
                                                     {(!s.builtin).then(|| { let id = del_id.clone(); view! {
                                                         <button class="settings-list-remove" type="button" title=move || t(locale.get(), "specialists.remove")
                                                             on:click=move |ev| {
@@ -6946,24 +7489,49 @@ pub(super) fn SettingsView(
                             <div class="skills-primary-actions">
                                 <button type="button" on:click=move |_| { skill_store_github.set(false); skill_store_open.set(true); }>{move || t(locale.get(), "store.browse")}</button>
                                 <button type="button" on:click=move |_| { skill_store_github.set(true); skill_store_open.set(true); }>{move || t(locale.get(), "store.github")}</button>
-                                <details class="settings-add-menu">
+                                <details class="settings-add-menu skill-add-menu">
                                     <summary>{compose_icon("plus")}{move || t(locale.get(), "skills.add")}{compose_icon("chevron-down")}</summary>
-                                    <button type="button" on:click=move |_| {
-                                        spawn_local(async move {
-                                            let picked = invoke("pick_skill_source", JsValue::UNDEFINED).await;
-                                            if let Some(path) = picked.as_string() {
-                                                install_skill_from.call(path);
-                                            }
-                                        });
-                                    }>{move || t(locale.get(), "skills.add_file")}</button>
-                                    <button type="button" on:click=move |_| {
-                                        spawn_local(async move {
-                                            let picked = invoke("pick_directory", JsValue::UNDEFINED).await;
-                                            if let Some(path) = picked.as_string() {
-                                                install_skill_from.call(path);
-                                            }
-                                        });
-                                    }>{move || t(locale.get(), "skills.add_folder")}</button>
+                                    <div class="skill-add-panel">
+                                        <fieldset class="skill-install-scope" data-testid="skill-install-scope">
+                                            <legend>{move || t(locale.get(), "skills.install_location")}</legend>
+                                            {["global", "project"].into_iter().map(|scope| view! {
+                                                <label class="skill-install-scope-option" data-scope=scope>
+                                                    <input type="radio" name="skill-install-scope" value=scope
+                                                        prop:checked=move || skill_install_scope.get() == scope
+                                                        on:change=move |_| skill_install_scope.set(scope.into()) />
+                                                    <span>
+                                                        <strong>{move || t(locale.get(), &format!("skills.install_scope.{scope}"))}</strong>
+                                                        <small class="skill-install-path">{move || skill_install_locations.get().map(|locations| {
+                                                            if scope == "project" { locations.project_dir } else { locations.global_dir }
+                                                        })}</small>
+                                                    </span>
+                                                </label>
+                                            }).collect_view()}
+                                            {move || (skill_install_scope.get() == "project").then(|| view! {
+                                                <p class="skill-install-scope-warning" role="note">{move || t(locale.get(), "skills.install_scope.project_warning")}</p>
+                                            })}
+                                        </fieldset>
+                                        <button type="button" on:click=move |ev| {
+                                            close_details_ancestor(&ev);
+                                            let scope = skill_install_scope.get_untracked();
+                                            spawn_local(async move {
+                                                let picked = invoke("pick_skill_source", JsValue::UNDEFINED).await;
+                                                if let Some(path) = picked.as_string() {
+                                                    install_skill_from.call((path, scope));
+                                                }
+                                            });
+                                        }>{move || t(locale.get(), "skills.add_file")}</button>
+                                        <button type="button" on:click=move |ev| {
+                                            close_details_ancestor(&ev);
+                                            let scope = skill_install_scope.get_untracked();
+                                            spawn_local(async move {
+                                                let picked = invoke("pick_directory", JsValue::UNDEFINED).await;
+                                                if let Some(path) = picked.as_string() {
+                                                    install_skill_from.call((path, scope));
+                                                }
+                                            });
+                                        }>{move || t(locale.get(), "skills.add_folder")}</button>
+                                    </div>
                                 </details>
                             </div>
                         </div>
@@ -7051,18 +7619,27 @@ pub(super) fn SettingsView(
                                 skills_list.get().into_iter().filter(|s| {
                                     skill_matches_filter(s, &tag, &q)
                                 }).collect::<Vec<_>>()
-                            } key=|s| format!("{}:{}:{}", s.name, s.enabled, join_tags(&s.tags)) let:s>
+                            } key=|s| format!("{}:{}:{}:{}:{}", s.name, s.enabled, join_tags(&s.tags), s.scope, s.copies.len()) let:s>
                                 {
                                     let name_toggle = s.name.clone();
                                     let name_open = s.name.clone();
                                     let enabled = s.enabled;
                                     let managed = s.managed;
                                     let scope_label = t(locale.get(), &format!("skills.scope.{}", s.scope));
+                                    let scope_title = if s.scope == "project" {
+                                        format!("{}\n{}", s.dir, t(locale.get(), "skills.lifetime.project"))
+                                    } else {
+                                        s.dir.clone()
+                                    };
+                                    let copies = s.copies.len();
                                     view! {
                                         <div class="settings-list-row skill-catalog-row" data-skill-name=s.name.clone()>
                                             <button type="button" class="skill-row-open" on:click=move |_| selected_skill.set(Some(name_open.clone()))>
                                                 <span class="skill-row-name">{s.name.clone()}</span>
-                                                <span class="skill-scope-badge" title=s.dir>{scope_label}</span>
+                                                <span class="skill-scope-badge" title=scope_title>{scope_label}</span>
+                                                {(copies > 1).then(|| view! {
+                                                    <span class="skill-scope-badge skill-copies-badge">{tf(locale.get(), "skills.copies_badge", &[("count", &copies.to_string())])}</span>
+                                                })}
                                                 <span class="skill-row-tags">{s.tags.into_iter().map(|tag| view! { <span class="skill-tag">{tag}</span> }).collect_view()}</span>
                                                 {compose_icon("chevron-right")}
                                             </button>
@@ -7102,7 +7679,8 @@ pub(super) fn SettingsView(
                 })}
                 {move || (settings_section.get() == "skills").then(|| selected_skill.get().map(|name| view! {
                     <crate::skill_detail::SkillDetail name=name skills=skills_list locale=locale
-                        refresh=refresh_skills save_tags=save_skill_tags delete_confirm=delete_confirm />
+                        refresh=refresh_skills save_tags=save_skill_tags delete_confirm=delete_confirm
+                        install_locations=skill_install_locations />
                     {move || skills_msg.get().map(|(ok, text)| view! {
                         <div class="settings-status" class:ok=ok class:fail=move || !ok>{text}</div>
                     })}
@@ -7492,7 +8070,12 @@ pub(super) fn SettingsView(
                                 </div>
                             </section>
                         })}
-                        <crate::channels_view::ChannelsPane locale=locale open=channels_open/>
+                        <crate::channels_view::ChannelsPane locale=locale open=channels_open
+                            on_open_project=Callback::new(move |id: String| {
+                                show_settings.set(false);
+                                open_project.call(id);
+                            })
+                            on_sync_settings_changed=sync_settings_changed/>
                         </div>
                     </div>
                 }.into_view())}
@@ -7640,6 +8223,17 @@ pub(super) fn SettingsView(
                                         && conn_form.get().is_some_and(|form| form.auth == "oauth")).then(|| view!{
                                         <p class="settings-note">{move || t(locale.get(), "conn.oauth.desc")}</p>
                                     })}
+                                    <ProxyRouteField
+                                        value=Signal::derive(move || conn_form.with(|form| form.as_ref().map(|form| form.proxy_url.clone()).unwrap_or_default()))
+                                        custom=Signal::derive(move || conn_form.with(|form| form.as_ref().is_some_and(|form| form.proxy_custom)))
+                                        on_change=Callback::new(move |(value, custom): (String, bool)| conn_form.update(|form| if let Some(form) = form {
+                                            form.proxy_url = value;
+                                            form.proxy_custom = custom;
+                                        }))
+                                        category="network.mcp"
+                                        hint="conn.proxy_hint"
+                                        test_id="conn-proxy"
+                                        disabled=oauth_authorizing />
                                     {move || if conn_testing.get() {
                                         view! {
                                             <div class="settings-status pending" data-testid="conn-test-status"
@@ -7670,6 +8264,10 @@ pub(super) fn SettingsView(
                                                     return;
                                                 }
                                                 let f = conn_form.get().unwrap_or_default();
+                                                if let Some(key) = route_error(&f.proxy_url, f.proxy_custom) {
+                                                    conn_test_msg.set(Some((false, t(locale.get(), key).into())));
+                                                    return;
+                                                }
                                                 conn_testing.set(true);
                                                 conn_test_msg.set(None);
                                                 conn_test_seq.update(|n| *n += 1);
@@ -7734,6 +8332,10 @@ pub(super) fn SettingsView(
                                                 return;
                                             }
                                             let f = conn_form.get().unwrap_or_default();
+                                            if let Some(key) = route_error(&f.proxy_url, f.proxy_custom) {
+                                                conn_test_msg.set(Some((false, t(locale.get(), key).into())));
+                                                return;
+                                            }
                                             spawn_local(async move {
                                                 if f.kind == "http" && f.auth == "oauth" {
                                                     oauth_authorizing.set(true);
@@ -7756,8 +8358,9 @@ pub(super) fn SettingsView(
                                                 let editing = f.id.is_some();
                                                 let conn = build_conn_json(&f, true);
                                                 let cmd = if editing { "update_mcp_connection" } else { "add_mcp_connection" };
-                                                if invoke_checked(cmd, to_value(&serde_json::json!({"conn": conn})).unwrap()).await.is_ok() {
-                                                    conn_form.set(None); conn_test_msg.set(None); refresh_conns.call(());
+                                                match invoke_checked(cmd, to_value(&serde_json::json!({"conn": conn})).unwrap()).await {
+                                                    Ok(_) => { conn_form.set(None); conn_test_msg.set(None); refresh_conns.call(()); }
+                                                    Err(error) => conn_test_msg.set(Some((false, js_error_text(error)))),
                                                 }
                                             });
                                         } disabled=move || conn_testing.get() || oauth_authorizing.get()>
@@ -8113,6 +8716,7 @@ pub(super) fn SettingsView(
                 let label = target.label().to_string();
                 let is_plugin = matches!(target, DeleteConfirm::Plugin { .. });
                 let is_skill = matches!(target, DeleteConfirm::Skill { .. });
+                let is_project_skill_copy = matches!(target, DeleteConfirm::ProjectSkillCopy { .. });
                 let is_host = matches!(target, DeleteConfirm::Host { .. });
                 let is_codex_account = matches!(target, DeleteConfirm::CodexAccount { .. });
                 let host_detail = match &target {
@@ -8123,6 +8727,8 @@ pub(super) fn SettingsView(
                     ("plugins.remove_confirm", "plugin", "plugins.remove", "plugin-remove-confirm")
                 } else if is_skill {
                     ("skills.remove_confirm", "skill", "skills.remove", "skill-remove-confirm")
+                } else if is_project_skill_copy {
+                    ("skills.remove_project_copy_confirm", "skill", "skills.remove_project_copy", "skill-project-copy-remove-confirm")
                 } else if is_host {
                     ("hosts.remove_confirm", "host", "environments.remove", "host-remove-confirm")
                 } else if is_codex_account {
@@ -8203,6 +8809,21 @@ pub(super) fn SettingsView(
                                                 match invoke_checked("remove_skill", arg).await {
                                                     Ok(_) => {
                                                         skills_msg.set(Some((true, t(locale.get(), "skills.removed").into())));
+                                                        refresh_skills.call(());
+                                                    }
+                                                    Err(error) => {
+                                                        skills_msg.set(Some((
+                                                            false,
+                                                            localize_backend(locale.get(), &js_error_text(error)),
+                                                        )));
+                                                    }
+                                                }
+                                            }
+                                            DeleteConfirm::ProjectSkillCopy { name, .. } => {
+                                                let arg = to_value(&serde_json::json!({ "name": name })).unwrap();
+                                                match invoke_checked("remove_project_skill_copy", arg).await {
+                                                    Ok(_) => {
+                                                        skills_msg.set(Some((true, t(locale.get(), "skills.project_copy_removed"))));
                                                         refresh_skills.call(());
                                                     }
                                                     Err(error) => {

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { tauriMock, parallelMock, parallelReplyTailText } from "./mock-tauri";
 import { openSidebarEntry } from "./sidebar-nav";
 import { expectPrimaryButton } from "./button-style";
+import { clickInChat } from "./chat-scroll";
 
 const officeFixtures = {
   xlsxBase64: readFileSync(resolve(__dirname, "../fixtures/office-preview.xlsx")).toString("base64"),
@@ -205,16 +206,6 @@ function newSessionButton(page: Page) {
 async function openAgentMenu(page: Page) {
   await page.getByRole("button", { name: "Agent options" }).click();
   return page.getByRole("menu", { name: "Agent options" });
-}
-
-async function enableDelegation(page: Page) {
-  const menu = await openAgentMenu(page);
-  const row = menu.locator("label.agent-menu-row", { hasText: "Delegation" });
-  const toggle = row.locator('input[type="checkbox"]');
-  if (!(await toggle.isChecked())) await row.click();
-  await expect.poll(() => lastInvokeArgs(page, "set_session_delegation_enabled"))
-    .toMatchObject({ enabled: true });
-  await page.keyboard.press("Escape");
 }
 
 async function openComputeMenu(page: Page) {
@@ -504,18 +495,55 @@ test("explicit remember requests open a global confirmation even when failure an
   await expect(modal).toContainText("asked Wisp to remember");
 });
 
+test("in a mandate's conversation the confirmed draft can become its standing instruction", async ({ page }) => {
+  await page.addInitScript(() => { (window as any).__mockMandateName = "Literature watch"; });
+  await enterApp(page);
+  await composer(page).fill("REMEMBER lead each report with methods papers");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const modal = page.getByTestId("turn-memory-overlay");
+  await expect(modal).toBeVisible();
+  const scope = page.getByTestId("turn-memory-scope");
+  await expect(scope.locator("option")).toHaveText(["Project memory", "Global habits", "This mandate: Literature watch"]);
+  await scope.selectOption("mandate");
+  // The global-replace picker belongs to the global scope only.
+  await expect(page.getByTestId("turn-memory-replace")).toHaveCount(0);
+  await page.getByTestId("turn-memory-content").fill("Lead each report with methods papers.");
+  await page.getByTestId("turn-memory-confirm").click();
+  await expect(modal).toHaveCount(0);
+  await expect(page.locator(".copy-toast")).toHaveText(
+    "Added to the mandate's standing instructions. It applies from the next round.",
+  );
+  await expect.poll(() => lastInvokeArgs(page, "confirm_turn_memory")).toMatchObject({
+    scope: "mandate",
+    content: "Lead each report with methods papers.",
+  });
+});
+
+test("an ordinary conversation offers no mandate scope", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("REMEMBER always use SI units");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("turn-memory-overlay")).toBeVisible();
+  await expect(page.getByTestId("turn-memory-scope").locator("option")).toHaveText(["Project memory", "Global habits"]);
+});
+
 test("optional tool-failure analysis exposes thresholds and proposes a confirmed lesson", async ({ page }) => {
   await enterApp(page);
-  let menu = await openAgentMenu(page);
-  await menu.locator("label.agent-menu-row", { hasText: "Analyze tool failures" }).click();
-  await expect(page.getByTestId("failure-rate-threshold")).toHaveValue("30");
-  await expect(page.getByTestId("minimum-failures")).toHaveValue("2");
-  await page.getByTestId("failure-rate-threshold").fill("60");
-  await page.getByTestId("failure-rate-threshold").press("Tab");
+  // The switch lives in Settings > Hooks; the composer menu holds only
+  // per-conversation options.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByTestId("settings-nav-hooks").click();
+  await expect(page.getByTestId("hook-failure-rate")).toHaveCount(0);
+  await page.getByTestId("hook-failure-analysis-toggle").locator("xpath=..").click();
+  await expect(page.getByTestId("hook-failure-rate")).toHaveValue("30");
+  await expect(page.getByTestId("hook-minimum-failures")).toHaveValue("2");
+  await page.getByTestId("hook-failure-rate").fill("60");
+  await page.getByTestId("hook-failure-rate").press("Tab");
   await expect.poll(() => lastInvokeArgs(page, "set_auto_failure_analysis_settings"))
     .toMatchObject({ settings: { enabled: true, failure_rate_threshold: 60, minimum_failures: 2 } });
-
   await page.keyboard.press("Escape");
+  await expect(page.getByTestId("hooks-pane")).toHaveCount(0);
   await composer(page).fill("TOOLFAILMEMORY diagnose retries");
   await page.getByRole("button", { name: "Send" }).click();
 
@@ -2819,6 +2847,46 @@ test("composer picker follows manual caret insertions and ignores pasted text", 
   await expect(page.locator(".mention-menu")).toHaveCount(0);
 });
 
+test("composer # finds archived sessions by keyword and says when nothing matches", async ({ page }) => {
+  await enterApp(page);
+  const composerInput = composer(page);
+  const menu = page.locator(".mention-menu");
+
+  // The recent list (empty query) never shows a shelved session, and the
+  // hint tells the user that typing filters the list.
+  await composerInput.press("#");
+  await expect(menu).toContainText("Current analysis");
+  await expect(menu).not.toContainText("Archived genome assembly notes");
+  await expect(menu.locator(".mention-menu-hint")).toContainText("Type to search");
+  await expect.poll(() => lastInvokeArgs(page, "search_sessions")).toMatchObject({
+    query: "",
+    limit: 40,
+    preferredProjectId: "default",
+    includeShelved: true,
+  });
+
+  await composerInput.pressSequentially("genome");
+  const archived = menu.locator(".mention-item").filter({ hasText: "Archived genome assembly notes" });
+  await expect(archived).toBeVisible();
+  await expect(archived.locator(".mention-item-sub")).toHaveText("wisp-depmap · Archived");
+  await expect.poll(() => lastInvokeArgs(page, "search_sessions")).toMatchObject({
+    query: "genome",
+    preferredProjectId: "default",
+    includeShelved: true,
+  });
+  await archived.click();
+  await expect(composerInput).toHaveValue("");
+  await expect(page.locator(".composer-reference-chips")).toContainText("Archived genome assembly notes");
+
+  // No hits: a plain row explains it, and Enter neither selects nor sends.
+  await composerInput.pressSequentially("#zzzz");
+  await expect(menu.locator(".mention-empty")).toHaveText("No matching sessions");
+  await expect(menu.locator(".mention-item")).toHaveCount(0);
+  await composerInput.press("Enter");
+  await expect(menu).toBeVisible();
+  await expect(composerInput).toHaveValue("#zzzz");
+});
+
 test("Ctrl+K opens the unified command palette and Shift+Enter attaches", async ({ page }) => {
   await enterApp(page);
   await page.keyboard.press("Control+k");
@@ -3257,6 +3325,7 @@ test("context usage keeps the running agent window until a model switch boundary
   // the old 128K Agent until Done.
   await expect.poll(() => trigger.evaluate((el) =>
     getComputedStyle(el).getPropertyValue("--context-gauge-angle").trim())).toBe("-34.2deg");
+  await page.evaluate(() => (window as any).__finishContextUsageRunning());
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible({ timeout: 3_000 });
   await expect.poll(() => trigger.evaluate((el) =>
     getComputedStyle(el).getPropertyValue("--context-gauge-angle").trim())).toBe("-54.0deg");
@@ -4081,7 +4150,15 @@ test("conversations can be selected and moved or deleted together", async ({ pag
   await expect(second).toHaveAttribute("aria-pressed", "true");
   await expect(sidebar.getByText("2 selected", { exact: true })).toBeVisible();
 
-  await sidebar.getByTestId("bulk-move-sessions").selectOption("folder-1");
+  // The move menu is the topmost layer: Escape closes it and leaves selecting on.
+  const moveMenu = sidebar.getByTestId("bulk-move-menu");
+  await sidebar.getByTestId("bulk-move-sessions").click();
+  await expect(moveMenu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(moveMenu).toHaveCount(0);
+  await expect(first).toHaveAttribute("aria-pressed", "true");
+  await sidebar.getByTestId("bulk-move-sessions").click();
+  await moveMenu.locator('[data-folder-id="folder-1"]').click();
   await expect.poll(() => page.evaluate(({ firstId, secondId }) => {
     const calls = ((window as any).__sendInvokeLog ?? [])
       .filter((call: any) => call.cmd === "move_session")
@@ -4121,6 +4198,68 @@ test("conversations can be selected and moved or deleted together", async ({ pag
       .map((args: any) => args.id);
     return [firstId, secondId].every((id) => ids.includes(id));
   }, { firstId, secondId })).toBe(true);
+});
+
+test("groups reorder by dragging and tick all their conversations at once", async ({ page }) => {
+  await page.addInitScript(parallelMock);
+  await page.goto("/");
+  await page.locator(".proj-card-main").first().click();
+
+  const folderInput = page.locator("#folder-modal-input");
+  for (const name of ["Alpha", "Beta", "Gamma"]) {
+    await page.getByRole("button", { name: "New group" }).click();
+    await folderInput.fill(name);
+    await page.locator(".modal", { has: folderInput }).getByRole("button", { name: "Save" }).click();
+    await expect(page.locator(".side-folder", { hasText: name })).toBeVisible();
+  }
+  const sidebar = page.locator(".sidebar");
+  const order = () => sidebar.locator(".side-folder").evaluateAll((rows) =>
+    rows.map((row) => row.getAttribute("data-folder-name")));
+  const group = (name: string) => sidebar.locator(`.side-folder[data-folder-name="${name}"]`);
+  const lastReorder = () => page.evaluate(() => {
+    const call = ((window as any).__sendInvokeLog ?? []).filter((entry: any) => entry.cmd === "reorder_folders").at(-1);
+    return call ? (call.args instanceof Map ? Object.fromEntries(call.args) : call.args).ids : null;
+  });
+  expect(await order()).toEqual(["Alpha", "Beta", "Gamma"]);
+
+  // Dragged down, a group lands after the one it is dropped on; dragged up, before it.
+  await group("Alpha").dragTo(group("Gamma"));
+  await expect.poll(order).toEqual(["Beta", "Gamma", "Alpha"]);
+  expect(await lastReorder()).toEqual(["folder-2", "folder-3", "folder-1"]);
+  await group("Alpha").dragTo(group("Beta"));
+  await expect.poll(order).toEqual(["Alpha", "Beta", "Gamma"]);
+  expect(await lastReorder()).toEqual(["folder-1", "folder-2", "folder-3"]);
+  // A group is not a conversation: dropping one never moves a session.
+  expect(await page.evaluate(() =>
+    ((window as any).__sendInvokeLog ?? []).some((entry: any) => entry.cmd === "move_session"))).toBe(false);
+
+  const titles = ["group-tick-one", "group-tick-two"];
+  for (const title of titles) {
+    await newSessionButton(page).click();
+    await composer(page).fill(title);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(sidebar.locator(".side-item.ses", { hasText: title })).toBeVisible({ timeout: 10_000 });
+  }
+  await sidebar.getByRole("button", { name: "Select", exact: true }).click();
+  for (const title of titles) await sidebar.locator(".side-item.ses", { hasText: title }).click();
+  await sidebar.getByTestId("bulk-move-sessions").click();
+  await sidebar.getByTestId("bulk-move-menu").locator('[data-folder-id="folder-2"]').click();
+  await expect(group("Beta")).toContainText("2");
+
+  // While selecting, the group's tick box covers its conversations and groups stay put.
+  await sidebar.getByRole("button", { name: "Select", exact: true }).click();
+  await expect(group("Beta")).toHaveAttribute("draggable", "false");
+  const tick = group("Beta").getByRole("checkbox");
+  await expect(tick).toHaveAttribute("aria-checked", "false");
+  await tick.click();
+  await expect(tick).toHaveAttribute("aria-checked", "true");
+  await expect(sidebar.getByText("2 selected", { exact: true })).toBeVisible();
+  await sidebar.locator(".side-item.ses", { hasText: titles[0] }).click();
+  await expect(tick).toHaveAttribute("aria-checked", "mixed");
+  await tick.click();
+  await tick.click();
+  await expect(tick).toHaveAttribute("aria-checked", "false");
+  await expect(sidebar.getByTestId("bulk-delete-sessions")).toBeDisabled();
 });
 
 test("group action button visibly renames and deletes groups", async ({ page }) => {
@@ -4899,6 +5038,71 @@ test("branch on an earlier user message opens a new session from that point", as
   });
 });
 
+test("quote a range of turns into a new conversation as composer context", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("first idea");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
+  await composer(page).fill("second idea");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator(".msg.user", { hasText: "second idea" })).toBeVisible();
+  const sourceId = (await lastInvokeArgs(page, "send_message"))!.sessionId;
+
+  const firstUser = page.locator(".msg.user", { hasText: "first idea" });
+  const secondUser = page.locator(".msg.user", { hasText: "second idea" });
+  const banner = page.getByTestId("excerpt-selection-banner");
+
+  // Escape pressed right after starting the range cancels only the selection.
+  await firstUser.getByRole("button", { name: "Quote / reuse" }).click();
+  await expect(banner).toBeVisible();
+  await expect(firstUser.locator(".user-bubble")).toHaveClass(/excerpt-start/);
+  await expect(secondUser.getByRole("button", { name: "End quote here" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(banner).toHaveCount(0);
+  await expect(firstUser.locator(".user-bubble")).not.toHaveClass(/excerpt-start/);
+  await expect(secondUser).toBeVisible();
+  expect(await lastInvokeArgs(page, "render_session_excerpt")).toBeNull();
+
+  // Start, then end on a later turn: the excerpt is rendered from the source
+  // and a fresh conversation opens with it staged as a composer quote.
+  await firstUser.getByRole("button", { name: "Quote / reuse" }).click();
+  await secondUser.getByRole("button", { name: "End quote here" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "render_session_excerpt")).toMatchObject({
+    id: sourceId,
+    startUserIndex: 0,
+    endUserIndex: 1,
+  });
+  const reuse = page.getByTestId("session-reuse-overlay");
+  await expect(reuse).toBeVisible();
+  // The review dialog closes before the range banner, without moving focus.
+  await page.keyboard.press("Escape");
+  await expect(reuse).toHaveCount(0);
+  await expect(banner).toBeVisible();
+  await secondUser.getByRole("button", { name: "End quote here" }).click();
+  await expect(reuse).toBeVisible();
+  await page.getByTestId("excerpt-attach").click();
+  await expect(reuse).toHaveCount(0);
+  await expect(banner).toHaveCount(0);
+  await expect(page.locator(".msg.user", { hasText: "second idea" })).toHaveCount(0);
+  const quote = page.locator(".composer-reference-card.quote");
+  await expect(quote).toContainText("Mock conversation · turns 1–2");
+  await expect(composer(page)).toHaveValue("");
+
+  await composer(page).fill("Continue from this discussion");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(async () => (await lastInvokeArgs(page, "send_message"))?.message ?? "")
+    .toContain("Continue from this discussion");
+  const sent = await lastInvokeArgs(page, "send_message");
+  expect(sent.sessionId).toMatch(/^s-/);
+  expect(sent.sessionId).not.toBe(sourceId);
+  expect(sent.message).toContain(
+    "Quoted turns from an earlier conversation `Mock conversation · turns 1–2`:",
+  );
+  expect(sent.message).toContain("> User:\n> first idea");
+  expect(sent.message).not.toContain("AI source-edit instruction");
+  await expect(quote).toHaveCount(0);
+});
+
 for (const branchFrom of ["assistant", "user"] as const) {
   test(`historical message actions work during a running turn (${branchFrom} branch)`, async ({ page }) => {
     await enterApp(page);
@@ -5366,8 +5570,66 @@ test("workspace drag hover clears on cancellation and ignores text drags", async
   });
   await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
   await expect(page.locator('[data-reference-kind="file-path"]')).toHaveCount(0);
+  await expect(page.locator('[data-reference-kind="session"]')).toHaveCount(0);
   expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
   await data.dispose();
+});
+
+test("dragging a sidebar conversation or group onto the composer attaches them as context", async ({ page }) => {
+  await enterApp(page, "/?mockContextDrag=1");
+  const sidebar = page.locator(".sidebar");
+  const group = sidebar.locator('.side-folder[data-folder-name="Reviews"]');
+  // Scoped to the composer: a sent message renders its references with
+  // the same data-reference-kind.
+  const cards = page.locator('.composer-reference-chips [data-reference-kind="session"]');
+  const labels = cards.locator(".composer-attachment.ready");
+
+  // The project opens on its newest conversation, "QC review". Like `#`,
+  // the open conversation never references itself, so its group drops
+  // only the other member.
+  await expect(sidebar.locator('[data-session-id="drag-qc"]')).toHaveClass(/active/);
+  await group.dragTo(composer(page));
+  await expect(labels).toHaveText(["wisp-depmap / Alignment notes"]);
+  await cards.first().getByRole("button").click();
+  await expect(cards).toHaveCount(0);
+
+  // From a new conversation, every member of the group is a candidate.
+  await newSessionButton(page).click();
+  await expect(sidebar.locator('[data-session-id="drag-qc"]')).not.toHaveClass(/active/);
+  const loose = sidebar.locator('[data-session-id="drag-loose"]');
+  await expect(loose).toHaveAttribute("draggable", "true");
+  await composer(page).fill("Compare these");
+  await loose.dragTo(composer(page));
+  await expect(cards).toHaveCount(1);
+  await expect(cards).toHaveAttribute("title", "wisp-depmap / Loose notes");
+  await expect(composer(page)).toHaveValue("Compare these");
+  await expect(composer(page)).toBeFocused();
+  await expect(page.locator(".composer-inner")).not.toHaveClass(/composer-dragover/);
+
+  // The same conversation dropped again stays one chip.
+  await loose.dragTo(composer(page));
+  await expect(cards).toHaveCount(1);
+
+  // A group adds every conversation in it, after the chips already there,
+  // and moves nothing in the sidebar.
+  await group.dragTo(composer(page));
+  await expect(labels).toHaveText(["wisp-depmap / Loose notes", "wisp-depmap / QC review", "wisp-depmap / Alignment notes"]);
+  await group.dragTo(composer(page));
+  await expect(cards).toHaveCount(3);
+  expect(await page.evaluate(() =>
+    ((window as any).__sendInvokeLog ?? []).some((entry: any) => entry.cmd === "move_session"))).toBe(false);
+  await page.screenshot({ path: test.info().outputPath("sidebar-drag-context.png") });
+
+  // Removing one chip leaves the others; sending carries the rest as references.
+  await cards.nth(1).getByRole("button").click();
+  await expect(labels).toHaveText(["wisp-depmap / Loose notes", "wisp-depmap / Alignment notes"]);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+    references: [{ kind: "session", id: "drag-loose" }, { kind: "session", id: "drag-align" }],
+  });
+  await expect(cards).toHaveCount(0);
+  await expect(page.locator('.msg.user [data-reference-kind="session"]')).toHaveCount(2);
+  expect(await lastInvokeArgs(page, "upload_file")).toBeNull();
 });
 
 test("workspace file context menu attaches its path to the composer", async ({ page }) => {
@@ -5728,7 +5990,7 @@ test("center structure and FASTA previews fill the available height", async ({ p
 
   await openInCenter("model.pdb");
   await expect(page.locator('.center-file-preview[data-preview-kind="structure"] .rp-3dmol')).toBeVisible();
-  await expect(page.locator('.center-file-preview[data-preview-kind="structure"] .rp-3dmol canvas')).toBeVisible();
+  await expect(page.frameLocator('.center-file-preview iframe.rp-3dmol').locator('canvas')).toBeVisible();
   await expect.poll(() => heightRatio(".rp-3dmol")).toBeGreaterThan(0.75);
 
   await openInCenter("sequences.fasta");
@@ -6875,6 +7137,27 @@ test("Escape closes the compute submenu before Agent options", async ({ page }) 
   await expect(page.getByRole("menu", { name: "Agent options" })).toHaveCount(0);
 });
 
+test("agent menu groups per-conversation options and links to Settings", async ({ page }) => {
+  await enterApp(page);
+  const menu = await openAgentMenu(page);
+
+  const groups = menu.locator(".agent-menu-group");
+  await expect(groups).toHaveText(["Mode", "Agents", "Resources"]);
+  // Group order: mode switches, then the agents taking part, then compute.
+  const rows = menu.locator(".agent-menu-group, .agent-menu-row > span:first-child");
+  await expect(rows).toHaveText([
+    "Mode", "Plan first", "Full Permission",
+    "Agents", "Specialist", "Auto-review", "Reviewer model",
+    "Resources", "Compute",
+    "More in Settings",
+  ]);
+  await expect(menu.getByRole("button", { name: /^Reviewer model/ })).toHaveClass(/agent-menu-sub/);
+
+  await menu.getByTestId("agent-menu-more-settings").click();
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByTestId("hooks-pane")).toBeVisible();
+});
+
 test("Escape closes the sidebar sort menu without closing the sidebar", async ({ page }) => {
   await enterApp(page);
   await page.getByRole("button", { name: "Sort and group" }).click();
@@ -6886,31 +7169,17 @@ test("Escape closes the sidebar sort menu without closing the sidebar", async ({
   await expect(newSessionButton(page)).toBeVisible();
 });
 
-test("agent menu updates review, reviewer model, and memory preferences", async ({ page }) => {
+test("agent menu updates review and reviewer model preferences", async ({ page }) => {
   await enterApp(page);
   let menu = await openAgentMenu(page);
 
-  const delegation = menu.locator("label.agent-menu-row", { hasText: "Delegation" });
-  await expect(delegation.locator('input[type="checkbox"]')).not.toBeChecked();
-  await delegation.click();
-  await expect.poll(() => lastInvokeArgs(page, "set_session_delegation_enabled"))
-    .toMatchObject({ enabled: true });
-
-  const completion = page.getByTestId("agent-completion-policy");
-  await expect(completion).toHaveValue("inline");
-  await expect(menu.locator("label.agent-menu-row", { hasText: "Auto-resume parent" })).toHaveCount(0);
-  await completion.selectOption("background");
-  await expect.poll(() => lastInvokeArgs(page, "set_session_agent_completion"))
-    .toMatchObject({ policy: "background", autoResume: false });
-  const autoResume = menu.locator("label.agent-menu-row", { hasText: "Auto-resume parent" });
-  await expect(autoResume).toBeVisible();
-  await autoResume.click();
-  await expect.poll(() => lastInvokeArgs(page, "set_session_agent_completion"))
-    .toMatchObject({ policy: "background", autoResume: true });
-  await completion.selectOption("inline");
-  await expect.poll(() => lastInvokeArgs(page, "set_session_agent_completion"))
-    .toMatchObject({ policy: "inline", autoResume: false });
-  await expect(autoResume).toHaveCount(0);
+  // Delegation is always available, and the parent Agent chooses background
+  // per delegate_tasks call: neither a switch nor a completion policy remains.
+  await expect(menu.locator("label.agent-menu-row", { hasText: "Delegation" })).toHaveCount(0);
+  await expect(menu.locator(".agent-menu-row", { hasText: "Delegated tasks" })).toHaveCount(0);
+  await expect(menu.locator(".agent-menu-row", { hasText: "Auto-resume parent" })).toHaveCount(0);
+  await expect(menu.locator("select")).toHaveCount(0);
+  expect(await invokeCount(page, "get_session_agent_completion")).toBe(0);
 
   const autoReview = menu.locator("label.agent-menu-row", { hasText: "Auto-review" });
   await autoReview.click();
@@ -6954,8 +7223,9 @@ test("agent menu updates review, reviewer model, and memory preferences", async 
   });
   menu = await openAgentMenu(page);
 
-  await menu.locator("label.agent-menu-row", { hasText: "Memory" }).click();
-  await expect.poll(() => lastInvokeArgs(page, "set_memory_enabled")).toMatchObject({ enabled: false });
+  // App-wide switches moved out of the per-conversation menu.
+  await expect(menu.locator("label.agent-menu-row", { hasText: "Memory" })).toHaveCount(0);
+  await expect(menu.locator("label.agent-menu-row", { hasText: "Analyze tool failures" })).toHaveCount(0);
 
   await menu.locator("label.agent-menu-row", { hasText: "Auto-review" }).click();
   await expect.poll(() => lastInvokeArgs(page, "set_auto_review_enabled")).toMatchObject({ enabled: false });
@@ -6969,7 +7239,6 @@ test("agent menu updates review, reviewer model, and memory preferences", async 
 
 test("auto-review stays with the session that enabled it", async ({ page }) => {
   await enterApp(page);
-  await enableDelegation(page);
   let menu = await openAgentMenu(page);
   await menu.locator("label.agent-menu-row", { hasText: "Auto-review" }).click();
   await expect.poll(() => lastInvokeArgs(page, "set_auto_review_enabled")).toMatchObject({ enabled: true });
@@ -7230,6 +7499,12 @@ test("method-search Run reviews the frozen contract before start and exposes con
     .toMatchObject({ runId: "method-search-001" });
   await expect(details.getByTestId("method-search-resume")).toBeVisible();
   await expectPrimaryButton(details.getByTestId("method-search-resume"));
+  // The status change makes the next list refresh rebuild every run card;
+  // the contract under review must stay open with its controls instead of
+  // collapsing (it raced the one-second poll before).
+  await page.locator(".control-head-actions").getByRole("button", { name: "Refresh runs" }).click();
+  await expect(card).toContainText("paused");
+  await expect(details.getByTestId("method-search-resume")).toBeVisible();
   await details.getByTestId("method-search-resume").click();
   await expect.poll(() => lastInvokeArgs(page, "resume_method_search"))
     .toMatchObject({ runId: "method-search-001" });
@@ -7589,8 +7864,23 @@ test("unmeasured relay shows elapsed activity and collapses without cancelling",
   await expect(card).not.toContainText("0%");
   await expect(card).not.toContainText("ETA");
   await expect(card.locator("progress")).not.toHaveAttribute("value");
+  // The timer and background refreshes must update the same card, preserving
+  // keyboard focus as well as keeping element screenshots attached.
+  const originalCard = await card.elementHandle();
+  const cancel = card.getByRole("button", { name: "Cancel run" });
+  await cancel.focus();
   const elapsed = await card.locator(".transfer-elapsed").innerText();
   await expect.poll(() => card.locator(".transfer-elapsed").innerText()).not.toBe(elapsed);
+  expect(await originalCard!.evaluate(el => el.isConnected)).toBe(true);
+  await expect(cancel).toBeFocused();
+  await page.evaluate(() => {
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    run.progress_json = JSON.stringify({ ...JSON.parse(run.progress_json), current_file: "reads-next.fastq.gz" });
+  });
+  await expect(card).toContainText("reads-next.fastq.gz");
+  expect(await originalCard!.evaluate(el => el.isConnected)).toBe(true);
+  await expect(cancel).toBeFocused();
+  await card.screenshot({ path: test.info().outputPath("relay-expanded.png") });
   // A higher surface consumes Escape first; the transfer tray stays expanded.
   await composer(page).press("@");
   await expect(page.locator(".mention-menu")).toBeVisible();
@@ -8064,6 +8354,61 @@ test("active Run elapsed time advances without waiting for a backend refresh (#6
   const initial = await elapsed();
   await expect.poll(elapsed, { timeout: 3_000 }).not.toBe(initial);
   expect(await card.evaluate((element) => (element as any).__clockStableProbe === true)).toBe(true);
+});
+
+test("active Run heartbeat follows heartbeat-only polls without rebuilding the card", async ({ page }) => {
+  await page.goto("/?mockLiveRunClock=1");
+  await page.getByTestId("recent-session-card").nth(1).click();
+
+  const card = page.getByTestId("auto-run-monitor").locator(".run-monitor-card");
+  const meta = card.locator(".run-monitor-meta");
+  await expect(meta).toContainText("Heartbeat");
+  await card.evaluate((element) => ((element as any).__heartbeatStableProbe = true));
+  // Nothing but the heartbeat moves, as on every poll of a quiet Run.
+  await page.evaluate(() => {
+    const run = (window as any).__mockRuns.find((item: any) => item.id === "run-local-002");
+    run.last_polled_at = Math.floor(Date.now() / 1000) - 125;
+  });
+  await expect(meta).toContainText(/Heartbeat 2m/, { timeout: 8_000 });
+  expect(await card.evaluate((element) => (element as any).__heartbeatStableProbe === true)).toBe(true);
+});
+
+test("a Run card asks about its own progress in the side chat", async ({ page }) => {
+  await page.goto("/?mockLiveRunClock=1");
+  await page.getByTestId("recent-session-card").nth(1).click();
+
+  const card = page.getByTestId("auto-run-monitor").locator(".run-monitor-card");
+  const title = (await card.locator(".run-monitor-title strong").textContent())!;
+  await card.getByTestId("run-monitor-ask").click();
+
+  // One click opens the side chat, asks, and scopes it to this Run.
+  const panel = page.locator(".rightpane");
+  await expect(panel.locator(".sidechat-in-pane")).toBeVisible();
+  await expect(panel.locator(".sidechat-row.user")).toContainText(title);
+  await expect.poll(() => lastInvokeArgs(page, "side_chat")).toMatchObject({
+    runId: "run-local-002",
+    question: expect.stringContaining(title),
+  });
+  const chip = panel.getByTestId("sidechat-run");
+  await expect(chip).toContainText(title);
+
+  // Follow-ups stay on the Run until the chip is removed.
+  const input = panel.locator("#side-chat-input");
+  await expect(panel.locator(".sidechat-row.assistant")).toHaveCount(1);
+  await input.fill("any errors?");
+  await input.press("Enter");
+  await expect.poll(() => lastInvokeArgs(page, "side_chat")).toMatchObject({
+    runId: "run-local-002",
+    question: "any errors?",
+  });
+  await expect(panel.locator(".sidechat-row.assistant")).toHaveCount(2);
+  await chip.getByRole("button", { name: "Remove attachment" }).click();
+  await expect(chip).toHaveCount(0);
+  await input.fill("back to the conversation");
+  await input.press("Enter");
+  await expect.poll(async () => (await lastInvokeArgs(page, "side_chat")).question)
+    .toBe("back to the conversation");
+  expect((await lastInvokeArgs(page, "side_chat")).runId ?? null).toBeNull();
 });
 
 test("image generation shows a placeholder and replaces it with the PNG", async ({ page }) => {
@@ -9364,8 +9709,10 @@ for (const locale of ["en", "zh"]) {
     await expect(effort).toHaveAccessibleDescription(/.+/);
     const image = page.getByTestId("use-for-image-generation");
     const video = page.getByTestId("use-for-video-generation");
+    const expert = page.getByTestId("use-for-expert");
     await expect(image).toHaveAccessibleDescription(locale === "zh" ? /自定义模型 ID/ : /Custom model IDs/);
     await expect(video).toHaveAccessibleDescription(/grok-imagine-video/);
+    await expect(expert).toHaveAccessibleDescription(locale === "zh" ? /每轮最多一次/ : /once per turn/);
     for (const width of [1440, 640]) {
       await page.setViewportSize({ width, height: 1200 });
       const control = (await effort.boundingBox())!;
@@ -9374,7 +9721,7 @@ for (const locale of ["en", "zh"]) {
       expect(hint.y - control.y - control.height).toBeGreaterThanOrEqual(0);
       expect(hint.y - control.y - control.height).toBeLessThan(12);
       const groups = form.locator(".model-capability");
-      await expect(groups).toHaveCount(3);
+      await expect(groups).toHaveCount(4);
       for (const group of await groups.all()) {
         const explanation = group.locator(":scope > .hint");
         const bounds = (await group.boundingBox())!;
@@ -9383,8 +9730,8 @@ for (const locale of ["en", "zh"]) {
         expect(text.x + text.width).toBeLessThanOrEqual(bounds.x + bounds.width);
         expect(text.y + text.height).toBeLessThanOrEqual(bounds.y + bounds.height);
       }
-      const imageGroup = (await groups.nth(1).boundingBox())!;
-      const videoGroup = (await groups.nth(2).boundingBox())!;
+      const imageGroup = (await groups.filter({ has: image }).boundingBox())!;
+      const videoGroup = (await groups.filter({ has: video }).boundingBox())!;
       if (width === 1440) {
         expect(Math.abs(imageGroup.y - videoGroup.y)).toBeLessThan(2);
       } else {
@@ -9686,6 +10033,44 @@ test("OpenCode preset defaults to Go and saves only user-configured models", asy
   expect(profiles).toEqual([["custom-model", "anthropic"]]);
 });
 
+test("add provider reports an unreadable save_model reply and frees the panel", async ({ page }) => {
+  await enterApp(page, "/?mockSaveModelMalformed=1");
+  await openSettingsSection(page, "Models");
+  await page.getByTestId("model-presets").getByRole("button", { name: "OpenCode", exact: true }).click();
+  await page.getByTestId("provider-model-row").first().getByTestId("provider-model-id").fill("custom-model");
+  await page.getByTestId("provider-api-key").fill("fake-go-key");
+  await page.getByTestId("save-provider").click();
+  // The backend stored the profile, so the form closes (a retry would add a
+  // duplicate) and the notice names the unreadable reply instead of leaving
+  // the panel busy with "Saving settings..." forever.
+  await expect(page.getByTestId("provider-add-form")).toBeHidden();
+  await expect(page.locator(".copy-toast")).toContainText("could not read the reply");
+  await page.getByTestId("add-provider").click();
+  await expect(page.getByTestId("save-provider")).toBeEnabled();
+});
+
+test("add provider sends save_model arguments as plain JSON, not Map/undefined", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Models");
+  await page.getByTestId("model-presets").getByRole("button", { name: "OpenCode", exact: true }).click();
+  await page.getByTestId("provider-model-row").first().getByTestId("provider-model-id").fill("custom-model");
+  await page.getByTestId("provider-api-key").fill("fake-go-key");
+  await page.getByTestId("save-provider").click();
+  await expect(page.getByTestId("provider-add-form")).toBeHidden();
+  // Raw argument shape, before the mock normalises Map to object: a macOS 12
+  // WKWebView stalled the save inside the default Map/undefined path.
+  const shape = await page.evaluate(() => {
+    const args = (window as any).__skillInvokeLog.filter((c: any) => c.cmd === "save_model").at(-1).args;
+    return {
+      isMap: args instanceof Map,
+      profileIsMap: args.profile instanceof Map,
+      videoDuration: args.profile.video_duration_secs,
+      key: args.key,
+    };
+  });
+  expect(shape).toEqual({ isMap: false, profileIsMap: false, videoDuration: null, key: "fake-go-key" });
+});
+
 test("OpenCode Go and Zen URLs never populate models or overwrite user entries", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Models");
@@ -9714,7 +10099,7 @@ test("advanced identity controls persist and validate a custom session header", 
   await expect(page.getByTestId("model-user-agent")).toBeDisabled();
   await page.getByTestId("model-send-session-id").check();
   await page.getByTestId("model-session-header-name").fill("x-custom-session");
-  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect.poll(() => lastInvokeArgs(page, "validate_settings")).toMatchObject({ settings: {
     send_user_agent: false, send_session_id: true, session_header_name: "x-custom-session",
   }});
@@ -9770,7 +10155,7 @@ test("model User-Agent advanced option validates, persists, and resets", async (
   await expect(userAgent).toHaveValue("");
   await expect(userAgent).toHaveAttribute("placeholder", "wisp-depmap");
   await userAgent.fill("research-client/1.0");
-  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect.poll(() => lastInvokeArgs(page, "validate_settings"))
     .toMatchObject({ settings: { user_agent: "research-client/1.0" } });
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -9800,7 +10185,7 @@ test("new API access applies its advanced User-Agent to every added model", asyn
   await expect(page.getByTestId("model-user-agent")).toBeHidden();
   await page.getByTestId("model-advanced-options").locator("summary").click();
   await page.getByTestId("model-user-agent").fill("research-client/2.0");
-  await page.getByRole("button", { name: "Valid", exact: true }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect.poll(() => lastInvokeArgs(page, "validate_settings"))
     .toMatchObject({ settings: { user_agent: "research-client/2.0" } });
   await page.getByTestId("save-provider").click();
@@ -10224,12 +10609,12 @@ for (const modelId of ["gpt-image-2.5", "gateway/custom-image-v3"]) {
     await openSettingsSection(page, "Models");
     await page.locator(".settings-list-row", { hasText: "opus-4.8" }).click();
     await providerSelect(page).selectOption("openai");
-    await page.getByLabel("Model").fill(modelId);
+    await page.getByRole("textbox", { name: "Model ID", exact: true }).fill(modelId);
     await page.getByTestId("use-for-image-generation").check();
     await expect(page.getByLabel("Max output tokens")).toHaveCount(0);
     await expect(page.getByTestId("image-size")).toBeVisible();
     await page.getByTestId("image-size").selectOption("1536x1024");
-    await page.getByRole("button", { name: "Valid" }).click();
+    await page.getByRole("button", { name: "Test connection", exact: true }).click();
     await expect.poll(() => lastInvokeArgs(page, "validate_settings")).toMatchObject({
       useForImageGeneration: true,
       settings: { provider: "openai", model: modelId, supports_vision: false },
@@ -10305,7 +10690,9 @@ test("misclassified chat model can recover its role without changing identity or
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => lastInvokeArgs(page, "save_model")).toMatchObject({
     restoreChatModel: true,
-    key: undefined,
+    // No key pasted: the Models panel serializes arguments JSON-compatibly,
+    // so an absent key is `null`, which the backend reads as "keep the stored one".
+    key: null,
     useForVision: true,
     useForImageGeneration: false,
     profile: { id: "default", model: "deepseek-v4-pro", supports_vision: true },
@@ -10333,7 +10720,7 @@ test("gpt-image-2 can be assigned for generation but not selected for chat", asy
 
   await providerSelect(page).selectOption("openai_responses");
   await page.getByLabel("Base URL").fill("https://api.openai.com/v1");
-  await page.getByLabel("Model").fill("gpt-image-2");
+  await page.getByRole("textbox", { name: "Model ID", exact: true }).fill("gpt-image-2");
   await expect(page.getByLabel("Max output tokens")).toHaveCount(0);
   await expect(page.getByLabel("Supports image input")).toHaveCount(0);
   await expect(page.getByTestId("image-size")).toBeVisible();
@@ -10342,7 +10729,7 @@ test("gpt-image-2 can be assigned for generation but not selected for chat", asy
   await page.getByTestId("image-size").selectOption("1536x1024");
   await page.getByTestId("image-quality").selectOption("high");
   await expect(page.getByTestId("use-for-image-generation")).toBeChecked();
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toHaveText(
     "Validated openai_responses with gpt-image-2",
   );
@@ -10379,7 +10766,7 @@ test("grok-imagine-image-2.0 can be assigned for generation but not selected for
 
   await providerSelect(page).selectOption("openai");
   await page.getByLabel("Base URL").fill("https://api.x.ai");
-  await page.getByLabel("Model").fill("grok-imagine-image-2.0");
+  await page.getByRole("textbox", { name: "Model ID", exact: true }).fill("grok-imagine-image-2.0");
   await expect(page.getByLabel("Max output tokens")).toHaveCount(0);
   await expect(page.getByLabel("Supports image input")).toHaveCount(0);
   await expect(page.getByTestId("image-aspect-ratio")).toBeVisible();
@@ -10390,7 +10777,7 @@ test("grok-imagine-image-2.0 can be assigned for generation but not selected for
   await page.getByTestId("image-resolution").selectOption("2k");
   await page.getByTestId("image-quality").selectOption("low");
   await expect(page.getByTestId("use-for-image-generation")).toBeChecked();
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toHaveText(
     "Validated openai with grok-imagine-image-2.0",
   );
@@ -10428,7 +10815,7 @@ test("grok-imagine-video can be assigned for generation but not selected for cha
 
   await providerSelect(page).selectOption("openai");
   await page.getByLabel("Base URL").fill("https://api.x.ai");
-  await page.getByLabel("Model").fill("grok-imagine-video");
+  await page.getByRole("textbox", { name: "Model ID", exact: true }).fill("grok-imagine-video");
   await expect(page.getByLabel("Max output tokens")).toHaveCount(0);
   await expect(page.getByLabel("Supports image input")).toHaveCount(0);
   await expect(page.getByTestId("video-duration")).toBeVisible();
@@ -10439,7 +10826,7 @@ test("grok-imagine-video can be assigned for generation but not selected for cha
   await page.getByTestId("video-aspect-ratio").selectOption("9:16");
   await page.getByTestId("video-resolution").selectOption("1080p");
   await expect(page.getByTestId("use-for-video-generation")).toBeChecked();
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toHaveText(
     "Validated openai with grok-imagine-video",
   );
@@ -10473,7 +10860,7 @@ test("settings normalizes a blank stored provider to openai", async ({ page }) =
   await enterApp(page);
   await openModelsSettings(page);
   await expect(providerSelect(page)).toHaveValue("openai");
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toContainText("Validated openai with deepseek-v4-pro");
 });
 
@@ -10482,7 +10869,7 @@ test("editing Base URL keeps protocol state and display aligned", async ({ page 
   await openModelsSettings(page);
   await page.getByLabel("Base URL").fill("https://api.deepseek.com");
   await expect(providerSelect(page)).toHaveValue("openai");
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toContainText("Validated openai with deepseek-v4-pro");
 });
 
@@ -10502,7 +10889,7 @@ test("model Base URL explains per-model endpoint suffixes", async ({ page }) => 
 test("settings can validate current API config", async ({ page }) => {
   await enterApp(page);
   await openModelsSettings(page);
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   // The mock profile has "supports images" on, so validation probes with a
   // test image and says so.
   await expect(page.locator(".settings-status")).toHaveText(
@@ -10510,7 +10897,7 @@ test("settings can validate current API config", async ({ page }) => {
   );
 
   await page.getByLabel("Supports image input").uncheck();
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toHaveText("Validated openai with deepseek-v4-pro");
 });
 
@@ -10522,7 +10909,7 @@ test("editing a saved model validates with that model profile id", async ({ page
   await expect(providerSelect(page)).toBeVisible();
   await expect(page.getByLabel("Model ID")).toHaveValue("opus-4.8");
 
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toContainText("Validated openai with deepseek-v4-pro");
   await expect.poll(() => lastInvokeArgs(page, "validate_settings")).toMatchObject({
     profileId: "opus",
@@ -10770,7 +11157,7 @@ test("credential services explain their behavior and open official setup links",
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
 
-  await expect(page.locator("[data-credential-service]")).toHaveCount(6);
+  await expect(page.locator("[data-credential-service]")).toHaveCount(5);
   await page.locator('[data-credential-service="openalex"]').click();
   await expect(page.locator(".cred-help-trigger")).toHaveCount(1);
   const openAlexHelp = page.getByRole("button", { name: "OpenAlex: About this credential" });
@@ -10864,12 +11251,13 @@ test("credential service subpages navigate, discard drafts, and update list stat
   await enterApp(page);
   await openSettingsSection(page, "Credentials");
   const list = page.getByTestId("credential-service-list");
-  await expect(list.locator("button")).toHaveCount(6);
+  await expect(list.locator("button")).toHaveCount(5);
+  await expect(page.locator('[data-credential-service="typesafe"]')).toHaveCount(0);
   await expect(list.locator("input")).toHaveCount(0);
   await expect.poll(async () => (await list.boundingBox())?.height ?? 0).toBeGreaterThan(250);
   await page.screenshot({ path: test.info().outputPath("credential-services.png"), animations: "disabled" });
 
-  for (const service of ["depmap", "openalex", "infinisynapse", "scimaster", "ncbi", "typesafe"]) {
+  for (const service of ["depmap", "openalex", "infinisynapse", "scimaster", "ncbi"]) {
     await page.locator(`[data-credential-service="${service}"]`).click();
     // Escape must work immediately, while focus is still outside the detail form.
     await page.keyboard.press("Escape");
@@ -11124,8 +11512,11 @@ test("skill manager updates and deletes user-added skills", async ({ page }) => 
   await addFile.click();
   await expect.poll(() => lastInvokeArgs(page, "install_skill")).toMatchObject({
     srcPath: "/downloads/paper-narrative.zip",
+    scope: "global",
   });
-  await expect(page.getByText("Skill added or updated.")).toBeVisible();
+  await expect(page.getByText(
+    "Installed paper-narrative as a Global skill at /home/me/.wisp/skills/paper-narrative. Every project can discover it.",
+  )).toBeVisible();
 
   const skill = page.locator('[data-skill-name="paper-narrative"]');
   await skill.locator(".skill-row-open").click();
@@ -11146,6 +11537,86 @@ test("skill manager updates and deletes user-added skills", async ({ page }) => 
   });
   await expect(page.locator('[data-skill-name="paper-narrative"]')).toHaveCount(0);
   await expect(page.getByText("Skill deleted.")).toBeVisible();
+});
+
+test("Add skill shows both install locations and reports the chosen scope", async ({ page }) => {
+  await enterApp(page, "/?mockSkillImport=1");
+  await openSettingsSection(page, "Skills");
+
+  const summary = page.getByText("Add skill", { exact: true });
+  await summary.click();
+  const scope = page.getByTestId("skill-install-scope");
+  await expect(scope.locator('[data-scope="global"]')).toContainText("All projects (global)");
+  await expect(scope.locator('[data-scope="global"]')).toContainText("/home/me/.wisp/skills");
+  await expect(scope.locator('[data-scope="project"]')).toContainText("This project only");
+  await expect(scope.locator('[data-scope="project"]')).toContainText("/mock/root/project/.wisp/skills");
+  await expect(scope.getByRole("radio", { name: /All projects/ })).toBeChecked();
+  await expect(scope.getByRole("note")).toHaveCount(0);
+
+  await scope.getByRole("radio", { name: /This project only/ }).check();
+  await expect(scope.getByRole("note")).toContainText("Moving or deleting the folder moves or removes them.");
+  await page.getByRole("button", { name: "Add SKILL.md or ZIP" }).click();
+  await expect(scope).toBeHidden();
+  await expect.poll(() => lastInvokeArgs(page, "install_skill")).toEqual({
+    srcPath: "/downloads/paper-narrative.zip",
+    scope: "project",
+  });
+  await expect(page.getByText(
+    "Installed paper-narrative as a Project skill at /mock/root/project/.wisp/skills/paper-narrative. Only this project can discover it.",
+  )).toBeVisible();
+
+  // The choice persists while Settings stays open.
+  await summary.click();
+  await expect(scope.getByRole("radio", { name: /This project only/ })).toBeChecked();
+});
+
+test("skill detail shows copies and promotes a project skill before removing its project copy", async ({ page }) => {
+  await enterApp(page, "/?mockSkillScopes=1");
+  await openSettingsSection(page, "Skills");
+
+  const duplicateRow = page.locator('[data-skill-name="nature-academic-search"]');
+  await expect(duplicateRow).toContainText("Bundled");
+  await expect(duplicateRow).toContainText("2 copies");
+  await duplicateRow.locator(".skill-row-open").click();
+  const detail = page.getByTestId("skill-detail");
+  const copies = detail.getByTestId("skill-copies");
+  await expect(copies.locator('[data-scope="bundled"]')).toContainText("Active");
+  await expect(copies.locator('[data-scope="project"]')).toContainText("Shadowed");
+  await expect(copies.locator('[data-scope="project"]')).toContainText("Same SKILL.md as the active copy");
+  await expect(copies.locator('[data-scope="project"]')).toContainText("Lives with this project.");
+  await expect(detail.getByText("You can remove the project copy or keep both.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(detail).toBeHidden();
+
+  const projectRow = page.locator('[data-skill-name="session-stats"]');
+  await expect(projectRow).toContainText("Project");
+  await expect(projectRow).not.toContainText("copies");
+  await projectRow.locator(".skill-row-open").click();
+  await expect(detail.getByTestId("skill-scope")).toContainText("Lives with this project.");
+  await expect(detail.getByTestId("skill-copies")).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Remove project copy" })).toHaveCount(0);
+  await expect(detail.getByTestId("skill-scope")).toContainText("Copies this skill to /home/me/.wisp/skills.");
+
+  await detail.getByRole("button", { name: "Promote to global" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "promote_skill_to_global")).toEqual({ name: "session-stats" });
+  await expect(detail.getByTestId("skill-scope")).toContainText(
+    "Installed session-stats as a Global skill at /home/me/.wisp/skills/session-stats. Every project can discover it. In this project the Project copy at /mock/root/project/.wisp/skills/session-stats still takes precedence.",
+  );
+  await expect(detail.getByRole("button", { name: "Promote to global" })).toHaveCount(0);
+  await expect(detail.getByTestId("skill-copies").locator('[data-scope="global"]')).toContainText("Shadowed");
+
+  await detail.getByRole("button", { name: "Remove project copy" }).click();
+  const confirm = page.getByTestId("skill-project-copy-remove-confirm");
+  await expect(confirm).toContainText("Remove the project copy of session-stats?");
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(detail).toBeVisible();
+  await detail.getByRole("button", { name: "Remove project copy" }).click();
+  await confirm.getByRole("button", { name: "Remove project copy" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "remove_project_skill_copy")).toEqual({ name: "session-stats" });
+  await expect(page.getByText("Project copy removed.")).toBeVisible();
+  await expect(detail.getByTestId("skill-scope")).toContainText("Available to every project on this computer.");
+  await expect(detail.getByRole("button", { name: "Remove project copy" })).toHaveCount(0);
 });
 
 test("plugin settings diagnose, launch, install, and remove a feature plugin", async ({ page }) => {
@@ -11468,7 +11939,7 @@ test("settings validation rejects blank required fields", async ({ page }) => {
   await enterApp(page);
   await openModelsSettings(page);
   await page.getByLabel("Base URL").fill("");
-  await page.getByRole("button", { name: "Valid" }).click();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(page.locator(".settings-status")).toHaveText("Validation failed: API URL is required.");
 });
 
@@ -11495,7 +11966,7 @@ test("protocol switch keeps the current Base URL, endpoint suffix, and model ID"
 test("model form inputs keep focus while typing (#62)", async ({ page }) => {
   await enterApp(page);
   await openModelsSettings(page);
-  const model = page.getByLabel("Model");
+  const model = page.getByRole("textbox", { name: "Model ID", exact: true });
   await model.fill("");
   // Type character-by-character. The bug: the form pane was gated on the whole
   // model_form signal, so each keystroke rebuilt the inputs and dropped focus —
@@ -11546,6 +12017,33 @@ test("native approval remains clickable while the agent turn is blocked", async 
   await expect.poll(() => page.evaluate(() =>
     Object.values((window as any).__nativeConfirmPending ?? {}).some(Boolean)
   )).toBe(false);
+});
+
+test("approval card can enable Full Permission through the warning", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("BLOCKINGCONFIRM");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const shortcut = page.getByTestId("approval-full-permission");
+  await expect(shortcut).toBeVisible({ timeout: 10_000 });
+  await shortcut.click();
+  const warning = page.getByRole("heading", { name: "Enable Full Permission?" });
+  await expect(warning).toBeVisible();
+
+  // Escape closes only the warning: nothing is enabled or answered yet.
+  await page.keyboard.press("Escape");
+  await expect(warning).toHaveCount(0);
+  await expect(shortcut).toBeVisible();
+  expect(await invokeArgsList(page, "set_session_full_permission")).toHaveLength(0);
+
+  await shortcut.click();
+  await page.getByRole("button", { name: "Enable Full Permission" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_session_full_permission")).toMatchObject({
+    sessionId: expect.stringMatching(/^s-/),
+    enabled: true,
+  });
+  // The backend settles the waiting request itself when the mode turns on.
+  expect(await invokeArgsList(page, "confirm_response")).toHaveLength(0);
 });
 
 test("background approval targets its session after switching conversations", async ({ page }) => {
@@ -11673,7 +12171,7 @@ test("composer plan stays visible through folded tools, live updates and session
   await expect(strip.locator(".composer-plan-track > span")).toHaveCSS("transition-duration", "0s");
   await page.evaluate(() => (window as any).__finishPlanProgress());
   await expect(strip).not.toHaveClass(/is-running/);
-  await expect(strip).toContainText("not running");
+  await expect(strip).toContainText("Turn ended · plan unfinished");
   await update("[x] Inspect data\n[x] Check barcode alignment\n[x] Verify results");
   await expect(strip).toContainText("Plan completed");
   await expect(strip).toContainText("3 / 3 completed");
@@ -11684,6 +12182,54 @@ test("composer plan stays visible through folded tools, live updates and session
   await expect(strip).toHaveCount(0);
 });
 
+for (const reconciled of [false, true]) {
+  test(`composer plan settles after automatic review with reconciliation=${reconciled}`, async ({ page }) => {
+    await enterApp(page, "/?mockSessionModels=1");
+    await page.locator('[data-session-id="s-model-a"]').click();
+    await composer(page).fill("PLANPROGRESS");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => typeof (window as any).__finishPlanProgress)).toBe("function");
+    const strip = page.getByTestId("composer-plan-progress");
+    const update = async (content: string, ok = true) => {
+      await emitTauriEvent(page, "agent", { kind: "ToolCall", frame_id: "s-model-a", name: "update_plan", preview: "Plan update" });
+      await emitTauriEvent(page, "agent", { kind: "ToolResult", frame_id: "s-model-a", name: "update_plan", ok, content });
+    };
+    await update("[~] Inspect data\n[ ] Analyze\n[ ] Write report\n[ ] Verify results");
+    await strip.getByTestId("composer-plan-toggle").click();
+    const steps = strip.getByTestId("composer-plan-steps");
+    await expect(steps.locator('[data-status="running"]')).toHaveCount(1);
+    await emitTauriEvent(page, "agent", { kind: "Text", frame_id: "s-model-a", delta: "The report passed all self-checks." });
+    await emitTauriEvent(page, "agent", { kind: "ReviewStarted", frame_id: "s-model-a" });
+    await expect(strip).toHaveClass(/is-running/);
+    await emitTauriEvent(page, "agent", { kind: "CorrectionStarted", frame_id: "s-model-a", model: "mock" });
+    await expect(strip).toHaveClass(/is-running/);
+    await expect(strip).toContainText("0 / 4 completed");
+    const finished = "[x] Inspect data\n[x] Analyze\n[x] Write report\n[x] Verify results";
+    // A failed final update must leave the accepted 0/4 visible after Done.
+    await update(finished, reconciled);
+    await page.evaluate(() => (window as any).__finishPlanProgress());
+    await expect(strip).not.toHaveClass(/is-running/);
+    await expect(strip.locator(".composer-plan-mark")).not.toHaveCSS("animation-name", "composer-plan-orbit");
+    await expect(steps.locator('[data-status="running"]')).toHaveCount(0);
+    if (reconciled) {
+      await expect(strip).toContainText("Plan completed");
+      await expect(strip).toContainText("4 / 4 completed");
+      await expect(steps.locator('[data-status="done"]')).toHaveCount(4);
+    } else {
+      await expect(strip).toContainText("Turn ended · plan unfinished");
+      await expect(strip).toContainText("0 / 4 completed");
+      await expect(strip).not.toHaveClass(/is-complete/);
+      await expect(steps.locator('[data-status="unfinished"]')).toContainText("Unfinished");
+      await expect(steps.locator('[data-status="pending"]')).toHaveCount(3);
+    }
+    await page.locator('[data-session-id="s-model-b"]').click();
+    await expect(strip).toHaveCount(0);
+    await page.locator('[data-session-id="s-model-a"]').click();
+    await expect(strip).not.toHaveClass(/is-running/);
+    await expect(strip).toContainText(reconciled ? "4 / 4 completed" : "Turn ended · plan unfinished");
+  });
+}
+
 test("composer plan supports Chinese, cancelled steps and narrow light/dark layouts", async ({ page }, testInfo) => {
   await page.goto("/?mockSessionModels=1&mockLocale=zh");
   await page.locator(".proj-card-main").first().click();
@@ -11692,6 +12238,7 @@ test("composer plan supports Chinese, cancelled steps and narrow light/dark layo
     content: "[x] 检查输入数据\n[~] 检查训练输出数据中 barcode 与 species 的对应关系并回溯数据拼接逻辑\n[-] 可选对照分析" });
   const strip = page.getByTestId("composer-plan-progress");
   await expect(strip).toContainText("1 / 3 已完成");
+  await expect(strip).toContainText("回合已结束，计划未收尾");
   for (const theme of ["light", "dark"]) {
     await page.evaluate(theme => document.documentElement.setAttribute("data-theme", theme), theme);
     await strip.evaluate(el => { (el as HTMLElement).style.width = "280px"; });
@@ -11925,6 +12472,32 @@ test("inline approval scope is sent with confirmation", async ({ page }) => {
   });
 });
 
+test("approval waiting cues use the shared icon and waiting status color", async ({ page }) => {
+  await enterApp(page);
+  await composer(page).fill("NEEDCONFIRM");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const line = page.getByTestId("approval-wait-line");
+  await expect(line).toBeVisible({ timeout: 10_000 });
+  await expect(line.locator("svg")).toHaveCount(1);
+  await expect.poll(() => line.evaluate(el => getComputedStyle(el, "::before").content)).toBe("none");
+  const waiting = await page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--agent-waiting)";
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+  await expect(line).toHaveCSS("color", waiting);
+  const dot = page.locator(".approval-dot");
+  await expect(dot).toHaveCSS("background-color", waiting);
+  await expect(dot).toHaveCSS("animation-name", "approval-pulse");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(dot).toHaveCSS("animation-name", "none");
+  await expect(dot).toHaveCSS("opacity", "1");
+});
+
 test("R execution uses the language-specific approval label", async ({ page }) => {
   await enterApp(page);
   await composer(page).fill("NEEDRCONFIRM");
@@ -11945,6 +12518,8 @@ test("awaiting approval marks the session dot and requests a desktop notificatio
   await expect(waiting).toHaveCount(1);
   await expect(waiting.locator(".ses-attention")).toBeVisible();
   await expect(waiting.locator(".ses-attention svg")).toBeVisible();
+  await expect(waiting.locator(".ses-status-label")).toHaveText("Needs you");
+  await expect(page.getByTestId("sidebar-needs-you")).toContainText("1 need you");
   await expect(waiting.locator(".ses-live")).toBeHidden();
   // The UI asked the backend for a desktop notification carrying the session
   // title (the backend decides visibility from window focus + settings).
@@ -12623,18 +13198,18 @@ test("short windows fold the sidebar nav tail into a More flyout instead of scro
   // A long session list must not squeeze the nav into its own scroller.
   await expect.poll(() => nav.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
 
-  // 720px tall: the last three entries fold; New group / Files stay inline.
+  // 720px tall: the last four entries fold; New group / Files stay inline.
   await expect(nav.getByRole("button", { name: "Files", exact: true })).toBeVisible();
   await expect(nav.getByRole("button", { name: "Library", exact: true })).toBeHidden();
   await more.click();
-  await expect(menu.getByRole("button")).toHaveText(["Research journey", "Publication", "Library"]);
+  await expect(menu.getByRole("button")).toHaveText(["Research journey", "Memos", "Publication", "Library"]);
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await expect(page.locator(".sidebar")).toBeVisible();
 
   await page.setViewportSize({ width: 1280, height: 600 });
   await more.click();
-  await expect(menu.getByRole("button")).toHaveText(["New group", "Files", "Research journey", "Publication", "Library"]);
+  await expect(menu.getByRole("button")).toHaveText(["New group", "Files", "Research journey", "Memos", "Publication", "Library"]);
   await menu.getByRole("button", { name: "Library", exact: true }).click();
   await expect(menu).toHaveCount(0);
   await expect(page.getByTestId("library-screen")).toBeVisible();
@@ -12792,12 +13367,13 @@ for (const failure of ["command", "payload"]) {
         return original(cmd, args);
       };
     }, failure);
-    await loadEarlier.click();
+    // The button heads a thread that follows its latest row; see chat-scroll.ts.
+    await clickInChat(loadEarlier);
     await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toBeDisabled();
     await page.evaluate(() => (window as any).__releaseHistory());
     await expect(page.getByRole("alert")).toContainText("Could not load earlier messages:");
     await expect(loadEarlier).toBeEnabled();
-    await loadEarlier.click();
+    await clickInChat(loadEarlier);
     await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
@@ -12816,7 +13392,8 @@ test("earlier history remains available while the current turn is running (#1199
   });
   await composer(page).fill("Keep working while I read the earlier context");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+  // The button heads a thread that follows its latest row; see chat-scroll.ts.
+  await clickInChat(page.getByRole("button", { name: "Load earlier messages", exact: true }));
   await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
   await expect.poll(() => page.evaluate(() => (window as any).__transcriptPageCalls)).toEqual([null, 41]);
   await emitTauriEvent(page, "agent", {
@@ -12825,7 +13402,8 @@ test("earlier history remains available while the current turn is running (#1199
   await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
   await page.getByRole("button", { name: "Show newer messages", exact: true }).click();
   await expect(page.getByText("Still working on the latest answer", { exact: true })).toBeAttached();
-  await page.getByRole("button", { name: "Show earlier loaded messages", exact: true }).click();
+  // Also at the top of the loaded window; see chat-scroll.ts.
+  await clickInChat(page.getByRole("button", { name: "Show earlier loaded messages", exact: true }));
   await page.locator("#chat-scroller").evaluate((el) => {
     el.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
     el.scrollTop = 100;
@@ -12852,7 +13430,8 @@ test("a stale earlier page does not duplicate history after reloading a session 
       return original(cmd, args);
     };
   });
-  await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+  // The button heads a thread that follows its latest row; see chat-scroll.ts.
+  await clickInChat(page.getByRole("button", { name: "Load earlier messages", exact: true }));
   await expect(page.getByRole("button", { name: "Loading earlier messages…", exact: true })).toBeDisabled();
   await newSessionButton(page).click();
   await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
@@ -12885,11 +13464,12 @@ for (const staleOutcome of ["success", "failure"]) {
     }, staleOutcome);
     const loadEarlier = page.getByRole("button", { name: "Load earlier messages", exact: true });
     const loading = page.getByRole("button", { name: "Loading earlier messages…", exact: true });
-    await loadEarlier.click();
+    // The button heads a thread that follows its latest row; see chat-scroll.ts.
+    await clickInChat(loadEarlier);
     await expect(loading).toBeDisabled();
     await newSessionButton(page).click();
     await page.locator(".side-item.ses", { hasText: "Long transcript" }).click();
-    await loadEarlier.click();
+    await clickInChat(loadEarlier);
     await expect.poll(() => page.evaluate(() => (window as any).__historyRequests.length)).toBe(2);
     await page.evaluate(() => (window as any).__historyRequests[0]());
     // Flush the rejected promise / decoded response and the browser render.
@@ -12905,6 +13485,9 @@ for (const staleOutcome of ["success", "failure"]) {
 }
 
 test("a 62-turn history with a large message reaches its first question (#1199)", async ({ page }) => {
+  // Each earlier page re-renders a 380 KB message; with four workers sharing
+  // the runner's CPUs the three loads exceed the default timeout (#1578).
+  test.slow();
   await page.goto("/?mockLongPages=4&mockLongRows=40");
   await page.evaluate(() => {
     const core = (window as any).__TAURI__.core;
@@ -12923,7 +13506,8 @@ test("a 62-turn history with a large message reaches its first question (#1199)"
   });
   await page.locator(".proj-card-main").first().click();
   for (let index = 1; index <= 3; index++) {
-    await page.getByRole("button", { name: "Load earlier messages", exact: true }).click();
+    // The button heads a thread that follows its latest row; see chat-scroll.ts.
+    await clickInChat(page.getByRole("button", { name: "Load earlier messages", exact: true }));
     await expect(page.getByText(new RegExp(`Window page ${index} row 0 `))).toBeAttached();
   }
   await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toHaveCount(0);
@@ -12941,7 +13525,8 @@ test("long transcripts load earlier turns without jumping to the new top", async
   const scroller = page.locator("#chat-scroller");
   const loadEarlier = page.getByRole("button", { name: "Load earlier messages" });
   await expect(loadEarlier).toBeVisible();
-  await loadEarlier.click();
+  // The button heads a thread that follows its latest row; see chat-scroll.ts.
+  await clickInChat(loadEarlier);
 
   await expect(page.getByText("Oldest loaded question", { exact: true })).toBeAttached();
   await expect(loadEarlier).toHaveCount(0);
@@ -13191,7 +13776,8 @@ test("long transcript rendering keeps a bounded turn window", async ({ page }) =
   await page.locator(".proj-card-main").first().click();
 
   for (let loaded = 1; loaded < pageCount; loaded += 1) {
-    await page.getByRole("button", { name: "Load earlier messages" }).click();
+    // The button heads a thread that follows its latest row; see chat-scroll.ts.
+    await clickInChat(page.getByRole("button", { name: "Load earlier messages" }));
     await expect.poll(() => page.evaluate(() =>
       ((window as any).__transcriptPageCalls ?? []).length,
     )).toBe(loaded + 1);
@@ -13259,7 +13845,8 @@ test("a continuously open conversation unloads old live rows after a completed t
     element.scrollHeight - element.clientHeight - element.scrollTop,
   )).toBeLessThan(8);
 
-  await loadEarlier.click();
+  // The button heads a thread that follows its latest row; see chat-scroll.ts.
+  await clickInChat(loadEarlier);
   await expect.poll(() => lastInvokeArgs(page, "load_session")).toMatchObject({
     id: frameId,
     beforeSeq: 142,
@@ -13267,7 +13854,9 @@ test("a continuously open conversation unloads old live rows after a completed t
 });
 
 test("a multi-megabyte transcript stays interactive while an answer streams", async ({ page }) => {
-  test.setTimeout(45_000);
+  // Mounts 160 rows of 32 KB; slow() scales with the configured timeout instead
+  // of a fixed budget that four parallel workers on one runner overran (#1578).
+  test.slow();
   await page.goto(`/?mockLongPages=1&mockLongRows=160&mockLongRowBytes=${32 * 1024}`);
   await page.locator(".proj-card-main").first().click();
   await expect(page.getByText(/Window page 0 row 159/)).toBeVisible({ timeout: 15_000 });
@@ -14764,6 +15353,18 @@ test("new project form enables Create after name and folder are set", async ({ p
   await expect(create).toBeEnabled();
 });
 
+test("new project form reports an unreadable create_project response instead of staying open", async ({ page }) => {
+  await page.goto("/?mockCreateProjectMalformed=1");
+  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByPlaceholder("Project name").pressSequentially("My Project");
+  await page.locator(".pn-dir .btn-ghost").click();
+  await page.getByRole("button", { name: "Create" }).click();
+  // The backend already registered the folder, so the form must close and the
+  // failure must be visible rather than inviting a retry.
+  await expect(page.locator(".project-open-error")).toBeVisible();
+  await expect(page.locator("#new-project-name")).toHaveCount(0);
+});
+
 test("project folder import restores records and opens its workspace in place", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -14967,9 +15568,15 @@ test("project cards show the workspace path and aligned action icons", async ({ 
   // instead of floating between the meta line and the action icons.
   const when = cards.first().locator(".pc-name-row .pc-when");
   await expect(when).toBeVisible();
-  const nameBox = await cards.first().locator(".pc-name").boundingBox();
-  const whenBox = await when.boundingBox();
-  expect(Math.abs((nameBox!.y + nameBox!.height / 2) - (whenBox!.y + whenBox!.height / 2))).toBeLessThanOrEqual(4);
+  // Measure both in one frame: the column's entry animation translates the
+  // card for ~350 ms, and two separate boundingBox() round trips can straddle
+  // it when four workers share the runner's CPUs (#1579).
+  const offset = await cards.first().evaluate((card) => {
+    const name = card.querySelector(".pc-name")!.getBoundingClientRect();
+    const stamp = card.querySelector(".pc-name-row .pc-when")!.getBoundingClientRect();
+    return Math.abs((name.y + name.height / 2) - (stamp.y + stamp.height / 2));
+  });
+  expect(offset).toBeLessThanOrEqual(4);
   // Action glyphs share one uniform box and one vertical center line.
   const boxes = await cards.first().locator(".pc-actions button").evaluateAll((els) =>
     els.map((el) => {
@@ -15167,6 +15774,18 @@ test("session settings enable automatic context compaction by default", async ({
   });
 });
 
+test("session settings set the auto-compact threshold percent", async ({ page }) => {
+  await page.goto("/");
+  await openSettingsSection(page, "Session");
+  const percent = page.getByTestId("auto-compact-percent");
+  await expect(percent).toHaveValue("80");
+  await percent.fill("60");
+  await page.locator(".settings-footer").getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
+    settings: { auto_compact_percent: 60 },
+  });
+});
+
 test("session settings include model-switch semantic compact and idle hours", async ({ page }) => {
   await page.goto("/");
   await openSettingsSection(page, "Session");
@@ -15194,6 +15813,32 @@ test("session settings configure truncated-output auto-continue", async ({ page 
   await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
     settings: { auto_continue: true, auto_continue_limit: 4 },
   });
+});
+
+test("usage tip shows on the empty conversation and can be closed or disabled", async ({ page }) => {
+  await enterApp(page, "/?mockShowTips=1");
+  const tip = page.getByTestId("usage-tip");
+  await expect(tip).toBeVisible();
+  await expect(tip.locator(".usage-tip-text")).not.toHaveText(/^tip\.|\{modifier\}|^$/);
+  await tip.getByRole("button", { name: "Hide tips" }).click();
+  await expect(tip).toHaveCount(0);
+  await newSessionButton(page).click();
+  await expect(tip).toHaveCount(0);
+
+  await openSettingsSection(page, "Session");
+  const toggle = page.getByTestId("show-tips-enabled");
+  await expect(toggle).toBeChecked();
+  await toggle.locator("..").click();
+  await page.locator(".settings-footer").getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
+    settings: { show_tips: false },
+  });
+});
+
+test("usage tips stay hidden when the setting is off", async ({ page }) => {
+  await enterApp(page);
+  await expect(page.locator(".empty")).toBeVisible();
+  await expect(page.getByTestId("usage-tip")).toHaveCount(0);
 });
 
 test("session settings enable follow-up question suggestions by default", async ({ page }) => {
@@ -15445,6 +16090,33 @@ test("general settings resume the last workspace conversation by default", async
   await page.locator(".settings-footer").getByRole("button", { name: "Save" }).click();
   await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
     settings: { resume_last_session: false },
+  });
+});
+
+test("general settings switch the notification sound separately and preview the chosen sound (#1595)", async ({ page }) => {
+  await page.goto("/");
+  await openSettingsSection(page, "General");
+  const banner = page.getByTestId("notifications-enabled");
+  const sound = page.getByTestId("notification-sound-enabled");
+  await expect(banner).toBeChecked();
+  await expect(sound).not.toBeChecked();
+
+  const picker = page.getByTestId("notification-sound");
+  await expect(picker.locator("option")).toHaveText(["Basso", "Glass", "Hero", "Ping"]);
+  await expect(picker).toHaveValue("Glass");
+  await picker.selectOption("Ping");
+  // Preview plays the unsaved choice, even while the sound switch is off.
+  await page.getByTestId("notification-sound-preview").click();
+  await expect.poll(() => lastInvokeArgs(page, "preview_notification_sound")).toEqual({ sound: "Ping" });
+
+  // Banner off, sound on: each switch saves on its own.
+  await banner.locator("..").click();
+  await sound.locator("..").click();
+  await expect(banner).not.toBeChecked();
+  await expect(sound).toBeChecked();
+  await page.locator(".settings-footer").getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => lastInvokeArgs(page, "set_settings")).toMatchObject({
+    settings: { notifications_enabled: false, notification_sound_enabled: true, notification_sound: "Ping" },
   });
 });
 
@@ -16155,6 +16827,39 @@ test("deleting project data requires a second confirmation and five-second count
   )).toContain(true);
 });
 
+test("deleting project data lists project Skills that would be removed", async ({ page }) => {
+  await page.goto("/?mockProjectSkills=1");
+  await page.locator(".proj-card:not(.proj-example) .pc-del").first().click();
+  await expect(page.locator(".project-delete-choice-modal")).not.toContainText("project Skill");
+  await page.getByRole("button", { name: "Delete project and local data", exact: true }).click();
+
+  const skills = page.locator(".project-delete-data-modal").getByTestId("project-delete-skills");
+  await expect(skills).toContainText("This project contains 2 project Skill(s) in .wisp/skills.");
+  await expect(skills).toContainText("use Promote to global on each Skill");
+  await expect(skills.getByRole("listitem")).toHaveText(["nature-academic-search", "session-stats"]);
+  await expect.poll(async () => page.evaluate(() =>
+    ((window as any).__skillInvokeLog ?? [])
+      .filter((c: any) => c.cmd === "list_project_skill_packages")
+      .map((c: any) => c.args instanceof Map ? c.args.get("id") : c.args?.id),
+  )).toHaveLength(1);
+
+  // One Escape closes only the destructive layer; the choice dialog remains.
+  await page.keyboard.press("Escape");
+  await expect(skills).toHaveCount(0);
+  await expect(page.locator(".project-delete-choice-modal")).toBeVisible();
+});
+
+test("deleting project data without project Skills shows no Skill warning", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".proj-card:not(.proj-example) .pc-del").first().click();
+  await page.getByRole("button", { name: "Delete project and local data", exact: true }).click();
+  await expect(page.locator(".project-delete-data-modal")).toBeVisible();
+  await expect.poll(async () => page.evaluate(() =>
+    ((window as any).__skillInvokeLog ?? []).some((c: any) => c.cmd === "list_project_skill_packages"),
+  )).toBe(true);
+  await expect(page.getByTestId("project-delete-skills")).toHaveCount(0);
+});
+
 test("external links open in the system browser, not the app webview (#97)", async ({ page }) => {
   // A reference link in rendered markdown used to navigate the whole webview
   // away from the UI with no way back. Any external <a> must now be intercepted
@@ -16392,9 +17097,7 @@ test("Agents panel is activity-only and opens the standalone Workflow Studio", a
   await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
   const panel = page.getByTestId("agent-workflows");
 
-  await expect(panel).toContainText("Agent workflow activity");
-  await expect(panel).toContainText("Create and edit reusable workflows in Workflow Studio");
-  await expect(panel).toContainText("Delegation is off for this conversation");
+  await expect(panel).toContainText("No subagents in this conversation yet");
   await expect(panel.getByTestId("dynamic-agent-editor")).toHaveCount(0);
   await expect(panel.getByTestId("agent-create")).toHaveCount(0);
   await panel.getByTestId("agent-open-workflows").click();
@@ -16506,12 +17209,10 @@ test("nested Agent workflows render under their root without independent control
   await expect(nested).toContainText("Nested · depth 2");
   await expect(nested.locator('[data-step-id$="parent/leaf"]')).toBeVisible();
   await expect(nested.getByTestId("agent-retry")).toHaveCount(0);
-  await expect(nested).not.toContainText("Delegation is off for this workflow");
 });
 
 test("failed dynamic tasks and dependency-blocked tasks stay distinct", async ({ page }) => {
   await enterApp(page, "/?mockAgentWorkflow=partial");
-  await enableDelegation(page);
   await page.getByRole("button", { name: "Toggle panel" }).click();
   await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
   const card = page.getByTestId("agent-workflows").locator(".agent-workflow-card.dynamic").first();
@@ -16541,7 +17242,6 @@ test("failed dynamic tasks and dependency-blocked tasks stay distinct", async ({
 
 test("clearing a failed task retry token limit requests unlimited budget", async ({ page }) => {
   await enterApp(page, "/?mockAgentWorkflow=partial");
-  await enableDelegation(page);
   await page.getByRole("button", { name: "Toggle panel" }).click();
   await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
   const card = page.getByTestId("agent-workflows").locator(".agent-workflow-card.dynamic").first();
@@ -16556,6 +17256,33 @@ test("clearing a failed task retry token limit requests unlimited budget", async
     workflowId,
     budgetOverrides: { research_a: { max_tokens: 0 } },
   });
+});
+
+test("unlimited workflow budgets show usage without presenting zero as a ceiling", async ({ page }) => {
+  await enterApp(page, "/?mockAgentWorkflow=unlimited");
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
+  const card = page.getByTestId("agent-workflows").locator(".agent-workflow-card.dynamic").first();
+  await expect(card.getByTestId("agent-execution-usage")).toContainText("Execution 2: 497676/unlimited tokens · 28/unlimited tools");
+  await expect(card.getByTestId("agent-execution-usage")).toContainText("All executions: 497676 tokens");
+  await expect(card.getByTestId("agent-execution-error")).toHaveCount(0);
+});
+
+test("timed-out workflows explain fresh retry allowances and retain cumulative usage", async ({ page }) => {
+  await enterApp(page, "/?mockAgentWorkflow=timed-out");
+  await page.getByRole("button", { name: "Toggle panel" }).click();
+  await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
+  const card = page.getByTestId("agent-workflows").locator(".agent-workflow-card.dynamic").first();
+  await expect(card.getByTestId("agent-execution-error")).toContainText("timed out after 600 seconds");
+  await expect(card.getByTestId("agent-execution-usage")).toContainText("265036/256000 tokens");
+  await expect(card.getByTestId("agent-retry-hint")).toContainText("fresh time and budget allowances");
+  await expect(card.locator('[data-step-id$=":research_a"]').getByTestId("agent-retry-max-tokens")).toBeVisible();
+  await card.getByTestId("agent-retry").click();
+  await expect(card.locator(".agent-workflow-status")).toHaveText("Approved");
+  await expect(card.getByTestId("agent-execution-error")).toHaveCount(0);
+  await expect(card.getByTestId("agent-execution-usage")).toContainText("Execution 2: 0/256000 tokens");
+  await expect(card.getByTestId("agent-execution-usage")).toContainText("All executions: 265036 tokens");
+  await expect(card.locator('[data-step-id$=":research_b"] .agent-attempt-status')).toHaveText("Succeeded");
 });
 
 test("task results are readable without exposing the child Agent conversation", async ({ page }) => {
@@ -16582,23 +17309,6 @@ test("task results are readable without exposing the child Agent conversation", 
   await expect(page.getByTestId("agent-workflows")).toBeVisible();
   await expect(page.locator(".rightpane")).toBeVisible();
   await expect(card.getByRole("button", { name: "Take over" })).toHaveCount(0);
-});
-
-test("disabled delegation preserves running history and blocks new starts and retries", async ({ page }) => {
-  await enterApp(page, "/?mockAgentWorkflow=parallel");
-  await page.getByRole("button", { name: "Toggle panel" }).click();
-  await page.locator(".rightpane").getByRole("button", { name: "Agents", exact: true }).click();
-  const panel = page.getByTestId("agent-workflows");
-  const card = panel.locator(".agent-workflow-card.dynamic").first();
-
-  await expect(panel).toContainText("Delegation is off for this conversation");
-  await expect(card).toContainText("Main Agent parallel research batch");
-  await expect(panel.getByTestId("agent-create")).toHaveCount(0);
-  await expect(card.getByTestId("agent-edit")).toHaveCount(0);
-  await expect(card.getByTestId("agent-cancel")).toBeEnabled();
-  await card.getByTestId("agent-cancel").click();
-  await expect(card.locator(".agent-workflow-status")).toHaveText("Cancelled");
-  await expect(card.getByTestId("agent-retry")).toBeDisabled();
 });
 
 test("code lives in Notebook instead of Artifacts", async ({ page }) => {
@@ -16958,6 +17668,151 @@ test("DepMap specialist starts a bound session from settings and accepts the res
   await expect(page.getByText("Hello from mock wisp-depmap.")).toBeVisible({ timeout: 10_000 });
 });
 
+test("specialist import previews the whole package and needs explicit confirmation", async ({ page }) => {
+  const instructions = [
+    "You hunt primary literature.",
+    ...Array.from({ length: 40 }, (_, index) => `Rule ${index + 1}: cite the DOI and the exact sentence you rely on.`),
+    "Final line: never summarize without a citation.",
+  ].join("\n");
+  await page.addInitScript((text) => {
+    (window as any).__specialistImportPackage = {
+      format: "wisp-specialist",
+      version: 1,
+      name: "Paper hunter",
+      icon: "search",
+      color: "clay",
+      description: "Finds primary literature",
+      instructions: text,
+      skills: ["literature-review", "citation-graph"],
+      connectors: [],
+      model_hint: { provider: "anthropic", model: "opus-4.8" },
+    };
+  }, instructions);
+  await enterApp(page, "/?mockSpecialistImport=1");
+  await openSettingsSection(page, "Specialists");
+  await page.getByText("Add specialist").click();
+  await page.getByTestId("specialist-import").click();
+
+  const preview = page.getByTestId("specialist-import-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview.getByTestId("specialist-import-name")).toHaveText("Paper hunter");
+  // The complete instructions are shown verbatim, not an excerpt.
+  await expect(preview.getByTestId("specialist-import-instructions")).toHaveJSProperty("textContent", instructions);
+  // A skill this device lacks is marked; an empty connector whitelist reads
+  // as "None allowed", distinct from inheriting the project settings.
+  const skills = preview.getByTestId("specialist-import-skills");
+  await expect(skills.locator("li.missing")).toContainText("citation-graph");
+  await expect(skills.locator("li:not(.missing)")).toHaveText("literature-review");
+  await expect(preview.getByTestId("specialist-import-connectors")).toHaveText("None allowed");
+  await expect(preview.getByTestId("specialist-import-missing-hint")).toBeVisible();
+  await expect(preview.getByTestId("specialist-import-model-hint")).toHaveText("Exported with anthropic / opus-4.8");
+  // Only an exact provider + model match is preselected.
+  await expect(preview.getByTestId("specialist-import-model")).toHaveValue("opus");
+
+  const confirm = preview.getByTestId("specialist-import-confirm");
+  await expect(confirm).toBeDisabled();
+  await preview.getByTestId("specialist-import-reviewed").check();
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(preview).toBeHidden();
+  await expect.poll(() => lastInvokeArgs(page, "import_specialist")).toMatchObject({
+    package: {
+      format: "wisp-specialist",
+      name: "Paper hunter",
+      skills: ["literature-review", "citation-graph"],
+      connectors: [],
+    },
+    modelId: "opus",
+  });
+  await expect(page.locator(".settings-list-title").filter({ hasText: /^Paper hunter$/ })).toHaveCount(1);
+  await expect(page.getByTestId("specialists-status")).toHaveText("Imported specialist “Paper hunter”.");
+});
+
+test("specialist import refuses a name that matches a built-in, case-insensitively", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__specialistImportPackage = {
+      format: "wisp-specialist",
+      version: 1,
+      name: "reviewer",
+      instructions: "Pretend to be the reviewer.",
+      skills: null,
+      connectors: null,
+    };
+  });
+  await enterApp(page, "/?mockSpecialistImport=1");
+  await openSettingsSection(page, "Specialists");
+  await page.getByText("Add specialist").click();
+  await page.getByTestId("specialist-import").click();
+
+  const preview = page.getByTestId("specialist-import-preview");
+  await expect(preview.getByTestId("specialist-import-conflict")).toContainText("“Reviewer” already exists");
+  // null whitelists read as inherit, and no model hint means "follow active".
+  await expect(preview.getByTestId("specialist-import-skills")).toHaveText("Inherit project settings");
+  await expect(preview.getByTestId("specialist-import-model-follow")).toBeVisible();
+  await expect(preview.getByTestId("specialist-import-reviewed")).toBeDisabled();
+  await expect(preview.getByTestId("specialist-import-confirm")).toBeDisabled();
+  await preview.getByRole("button", { name: "Cancel" }).last().click();
+  await expect(preview).toBeHidden();
+  expect(await lastInvokeArgs(page, "import_specialist")).toBeNull();
+});
+
+test("Escape closes the specialist import preview before the Settings page", async ({ page }) => {
+  await enterApp(page, "/?mockSpecialistImport=1");
+  await openSettingsSection(page, "Specialists");
+  await page.getByText("Add specialist").click();
+  await page.getByTestId("specialist-import").click();
+  const preview = page.getByTestId("specialist-import-preview");
+  await expect(preview).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(preview).toBeHidden();
+  await expect(page.locator(".settings-page")).toBeVisible();
+  await expect(page.getByTestId("specialist-import")).toBeAttached();
+});
+
+test("specialist export warns about secret-like instructions before writing", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Specialists");
+  await page.getByText("Add specialist").click();
+  await page.getByText("Write from scratch").click();
+  await page.getByLabel("Name").fill("Keyholder");
+  await page.getByLabel("Instructions").fill("Be brief.\nCall the API with sk-proj-0000000000000000000000fake.");
+  await page.getByRole("button", { name: "Save" }).click();
+  const row = page.locator(".settings-list-row").filter({ hasText: "Keyholder" });
+  await expect(row).toBeVisible();
+
+  // Exporting from the form: the warning opens above the form, and one
+  // Escape closes only the warning.
+  await row.click();
+  await expect(page.getByLabel("Name")).toHaveValue("Keyholder");
+  await page.getByTestId("specialist-export-form").click();
+  const warning = page.getByTestId("specialist-export-warning");
+  await expect(warning).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(warning).toBeHidden();
+  await expect(page.getByLabel("Name")).toHaveValue("Keyholder");
+  await page.locator(".settings-head-back").click();
+
+  // Exporting from the row: the warning lists the line, and nothing is
+  // written until the user chooses to export anyway.
+  await row.getByTestId("specialist-export").click();
+  await expect(warning).toBeVisible();
+  await expect(warning.getByTestId("specialist-secret-findings")).toContainText("Line 2: API token");
+  await expect.poll(() => lastInvokeArgs(page, "export_specialist")).toMatchObject({ acknowledgeSecrets: false });
+  await warning.getByTestId("specialist-export-anyway").click();
+  await expect(warning).toBeHidden();
+  await expect.poll(() => lastInvokeArgs(page, "export_specialist")).toMatchObject({ acknowledgeSecrets: true });
+  await expect(page.getByTestId("specialists-status")).toHaveText("Exported to /downloads/Keyholder.wisp-specialist.json");
+});
+
+test("built-in specialists have no export action", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Specialists");
+  await expect(page.getByTestId("specialist-export")).toHaveCount(0);
+  await page.getByText("Reader").click();
+  await expect(page.getByLabel("Instructions")).toBeDisabled();
+  await expect(page.getByTestId("specialist-export-form")).toHaveCount(0);
+});
+
 test("specialist skills whitelist uses a searchable picker instead of a full list", async ({ page }) => {
   await enterApp(page);
   await openSettingsSection(page, "Specialists");
@@ -17232,6 +18087,202 @@ test("StickS3 listener errors remain visible without breaking settings", async (
   await expect(page.getByTestId("sticks3-channel-card")).toBeVisible();
 });
 
+test("remote web access needs a relay, then shows the connection link and resets the code", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Remote Access");
+  // The overview toggle stays disabled until a relay URL and token are saved.
+  await expect(page.getByTestId("remote-enabled")).toBeDisabled();
+  await page.getByTestId("remote-channel-row").click();
+  await expect(page.getByTestId("remote-channel-card")).toBeVisible();
+  await expect(page.getByTestId("remote-code")).toHaveCount(0);
+
+  await page.getByTestId("remote-relay-url").fill("http://relay.example.test");
+  await page.getByTestId("remote-relay-token").fill("relay-secret");
+  // A rejected save leaves the switch off.
+  await page.getByTestId("remote-enabled-detail").click();
+  await expect(page.getByText("The relay URL must use HTTPS (HTTP is allowed only for localhost).")).toBeVisible();
+  await expect(page.getByTestId("remote-enabled-detail")).not.toBeChecked();
+
+  await page.getByTestId("remote-relay-url").fill("https://relay.example.test");
+  await page.getByTestId("remote-enabled-detail").check();
+  await expect.poll(() => lastInvokeArgs(page, "set_remote_access")).toMatchObject({
+    enabled: true,
+    relayUrl: "https://relay.example.test",
+    relayToken: "relay-secret",
+  });
+  await expect(page.getByTestId("remote-detail-state")).toHaveText("Running");
+  // The token never comes back to the field after saving.
+  await expect(page.getByTestId("remote-relay-token")).toHaveValue("");
+  await expect(page.getByTestId("remote-code")).toHaveText("0000-0203-0405-0607-0809-0a0b-0c0d-0e0f");
+  await expect(page.getByTestId("remote-link")).toHaveText(
+    "https://relay.example.test/remote#0000-0203-0405-0607-0809-0a0b-0c0d-0e0f",
+  );
+
+  await page.getByTestId("remote-reset-code").click();
+  await expect(page.getByTestId("remote-code")).toHaveText("0001-0203-0405-0607-0809-0a0b-0c0d-0e0f");
+
+  await page.locator(".settings-head-back").click();
+  await expect(page.getByTestId("remote-enabled")).toBeChecked();
+  await page.getByTestId("remote-channel-row").locator(".toggle-track").click();
+  await expect.poll(() => lastInvokeArgs(page, "set_remote_access")).toMatchObject({ enabled: false });
+  await expect(page.getByTestId("remote-state")).toHaveText("Stopped");
+});
+
+test("the first computer founds a lab, then reviews members, invites and publishes the knowledge base", async ({ page }) => {
+  await enterApp(page);
+  await openSettingsSection(page, "Remote Access");
+  await page.getByTestId("lab-channel-row").click();
+  await expect(page.getByTestId("lab-channel-card")).toBeVisible();
+  await expect(page.getByTestId("lab-state")).toHaveText("Not joined");
+
+  // Without an invite code this computer founds the lab, so it names it.
+  await expect(page.getByTestId("lab-join")).toHaveText("Found lab");
+  await expect(page.getByTestId("lab-join")).toBeDisabled();
+  await page.getByTestId("lab-relay-url").fill("https://relay.example.test");
+  await page.getByTestId("lab-relay-token").fill("relay-secret");
+  await page.getByTestId("lab-member-name").fill("Ada");
+  await page.getByTestId("lab-name").fill("Genomics");
+  await page.getByTestId("lab-join").click();
+  await expect.poll(() => lastInvokeArgs(page, "lab_join")).toMatchObject({
+    relayUrl: "https://relay.example.test",
+    relayToken: "relay-secret",
+    name: "Ada",
+    labName: "Genomics",
+    invite: "",
+  });
+  await expect(page.getByTestId("lab-heading")).toHaveText("Genomics");
+  await expect(page.getByTestId("lab-state")).toHaveText("Leader");
+  await expect(page.getByTestId("lab-member-row")).toHaveCount(1);
+  await expect(page.getByTestId("lab-member-row")).toContainText("Ada");
+  // The leader cannot leave, and has nobody to remove yet.
+  await expect(page.getByTestId("lab-leave")).toHaveCount(0);
+  await expect(page.getByTestId("lab-remove")).toHaveCount(0);
+
+  await page.getByTestId("lab-invite-create").click();
+  await expect(page.getByTestId("lab-invite-code")).toHaveText("wisp-lab:invite-1");
+
+  // Somebody used that code: they wait for review. Reopening the page reloads.
+  await page.evaluate(() => {
+    (window as any).__mockLab.members.push({ id: "m2", name: "Lin", leader: false, pending: true });
+  });
+  await page.locator(".settings-head-back").click();
+  await page.getByTestId("lab-channel-row").click();
+  const lin = page.getByTestId("lab-member-row").filter({ hasText: "Lin" });
+  await expect(lin).toContainText("Awaiting approval");
+  await lin.getByTestId("lab-approve").click();
+  await expect.poll(() => lastInvokeArgs(page, "lab_approve_member")).toMatchObject({ memberId: "m2" });
+  await expect(lin).not.toContainText("Awaiting approval");
+  await expect(page.getByTestId("lab-message")).toHaveText("Member approved.");
+
+  // Removing takes two clicks on the same button.
+  await lin.getByTestId("lab-remove").click();
+  await expect(lin.getByTestId("lab-remove")).toHaveText("Click again to confirm");
+  await expect(page.getByTestId("lab-member-row")).toHaveCount(2);
+  await lin.getByTestId("lab-remove").click();
+  await expect.poll(() => lastInvokeArgs(page, "lab_remove_member")).toMatchObject({ memberId: "m2" });
+  await expect(page.getByTestId("lab-member-row")).toHaveCount(1);
+
+  await expect(page.getByTestId("lab-kb-summary")).toHaveText("The leader has not published a knowledge base yet.");
+  await expect(page.getByTestId("lab-kb-publish")).toBeDisabled();
+  await page.getByTestId("lab-kb-project").selectOption({ label: "Other project" });
+  await page.getByTestId("lab-kb-publish").click();
+  await expect.poll(() => lastInvokeArgs(page, "lab_publish_knowledge_base")).toMatchObject({ projectId: "other" });
+  await expect(page.getByTestId("lab-kb-summary")).toContainText('On this computer as the project "Other project"');
+
+  // No project answers lab mail until one is chosen; choosing saves at once.
+  await expect(page.getByTestId("lab-inbox-project")).toHaveValue("");
+  await page.getByTestId("lab-inbox-project").selectOption({ label: "Other project" });
+  await expect.poll(() => lastInvokeArgs(page, "lab_set_inbox_project")).toMatchObject({ projectId: "other" });
+  await expect(page.getByTestId("lab-message")).toHaveText("Lab mail setting saved.");
+  await expect(page.getByTestId("lab-inbox-project")).toHaveValue("other");
+  await page.getByTestId("lab-inbox-project").selectOption("");
+  await expect.poll(() => lastInvokeArgs(page, "lab_set_inbox_project")).toMatchObject({ projectId: "" });
+});
+
+test("founding a lab on an intranet relay makes Sync now available without a restart", async ({ page }) => {
+  await page.goto("/?mockSyncUnconfigured=1");
+  const projectCard = page.locator(".proj-card:not(.proj-example)").first();
+  await expect(projectCard.getByRole("button", { name: "Sync now" })).toHaveCount(0);
+
+  await openSettingsSection(page, "Remote Access");
+  await expect(page.getByTestId("sync-relay-url")).toHaveValue("");
+  await page.getByTestId("lab-channel-row").click();
+  await page.getByTestId("lab-relay-url").fill("http://10.10.3.27:8787");
+  await page.getByTestId("lab-relay-token").fill("relay-secret");
+  await page.getByTestId("lab-member-name").fill("Ada");
+  await page.getByTestId("lab-join").click();
+  await expect(page.getByTestId("lab-state")).toHaveText("Leader");
+
+  // The lab filled in the project sync relay; the open form shows it, so a
+  // later Save cannot blank it again.
+  await page.locator(".settings-head-back").click();
+  await expect(page.getByTestId("sync-relay-url")).toHaveValue("http://10.10.3.27:8787");
+  // Closing without saving is enough for the project card to offer sync.
+  await page.locator(".settings-head-close").click();
+  await expect(projectCard.getByRole("button", { name: "Sync now" })).toBeVisible();
+});
+
+test("a member joins a lab with an invite code, waits for approval and downloads the knowledge base", async ({ page }) => {
+  await enterApp(page, "/?mockLabFounded=1");
+  await openSettingsSection(page, "Remote Access");
+  await page.getByTestId("lab-channel-row").click();
+  await page.getByTestId("lab-relay-url").fill("https://relay.example.test");
+  await page.getByTestId("lab-relay-token").fill("relay-secret");
+  await page.getByTestId("lab-member-name").fill("Lin");
+  // The lab already has a leader, so founding it is refused with a reason.
+  await page.getByTestId("lab-join").click();
+  await expect(page.getByTestId("lab-message")).toHaveText(
+    "This lab already has a leader. Ask them for an invite code.",
+  );
+  await expect(page.getByTestId("lab-state")).toHaveText("Not joined");
+
+  await page.getByTestId("lab-invite").fill("wisp-lab:spent");
+  // With an invite code the lab already has its name.
+  await expect(page.getByTestId("lab-name")).toHaveCount(0);
+  await expect(page.getByTestId("lab-join")).toHaveText("Request to join");
+  await page.getByTestId("lab-join").click();
+  await expect(page.getByTestId("lab-message")).toHaveText(
+    "This invite code is not valid. It may have been used already or have expired.",
+  );
+
+  await page.getByTestId("lab-invite").fill("wisp-lab:valid");
+  await page.getByTestId("lab-join").click();
+  await expect(page.getByTestId("lab-state")).toHaveText("Awaiting approval");
+  await expect(page.getByTestId("lab-pending-note")).toBeVisible();
+  // A pending member sees neither members nor the knowledge base.
+  await expect(page.getByTestId("lab-members")).toHaveCount(0);
+  await expect(page.getByTestId("lab-kb-summary")).toHaveCount(0);
+
+  // The leader approves on their computer.
+  await page.evaluate(() => {
+    Object.assign((window as any).__mockLab, {
+      state: "active",
+      members: [
+        { id: "m1", name: "Ada", leader: true, pending: false },
+        { id: "me", name: "Lin", leader: false, pending: false },
+      ],
+      knowledge_base: { project_id: "other", local: false, project_name: "" },
+    });
+  });
+  await page.getByTestId("lab-refresh").click();
+  await expect(page.getByTestId("lab-state")).toHaveText("Member");
+  await expect(page.getByTestId("lab-member-row")).toHaveCount(2);
+  // Members review nobody, invite nobody and publish nothing.
+  await expect(page.getByTestId("lab-approve")).toHaveCount(0);
+  await expect(page.getByTestId("lab-remove")).toHaveCount(0);
+  await expect(page.getByTestId("lab-invite-create")).toHaveCount(0);
+  await expect(page.getByTestId("lab-kb-publish")).toHaveCount(0);
+  await expect(page.getByTestId("lab-leave")).toHaveText("Leave lab");
+
+  await expect(page.getByTestId("lab-kb-summary")).toHaveText(
+    "The lab has a knowledge base. Download it to read it on this computer.",
+  );
+  await page.getByTestId("lab-kb-download").click();
+  await expect.poll(() => invokeCount(page, "lab_join_knowledge_base")).toBe(1);
+  // The downloaded project opens and Settings closes.
+  await expect(page.getByTestId("lab-channel-card")).toHaveCount(0);
+});
+
 test("Ctrl+P imports Codex conversations from local, WSL, or SSH without rescanning", async ({ page }) => {
   await enterApp(page);
   await expect(page.locator(".sidebar").getByRole("button", { name: "Import from Codex" })).toHaveCount(0);
@@ -17467,7 +18518,7 @@ test("optional environment detection does not block first-run model setup", asyn
   await onboard.getByRole("button", { name: "Set up later" }).click();
   const environment = onboard.getByTestId("local-environment");
   await expect(environment).toContainText("local-env-setup");
-  await expect(environment.locator("dd")).toHaveCount(7);
+  await expect(environment.locator("dd")).toHaveCount(8);
   await expect(environment.locator("dd").first()).toContainText("Not found");
   await expect(onboard.getByRole("button", { name: "Get started" })).toBeEnabled();
   const viewport = page.viewportSize()!;
@@ -17623,6 +18674,7 @@ for (const locale of ["en", "zh"]) {
         npm_executable: "C:\\Program Files\\nodejs\\npm.cmd",
         sci_executable: "C:\\Users\\Researcher\\AppData\\Roaming\\npm\\sci.cmd",
         pixi_executable: "C:\\Users\\Researcher\\.pixi\\bin\\pixi.exe",
+        cua_driver_executable: "C:\\Users\\Researcher\\AppData\\Local\\Programs\\Cua\\cua-driver.exe",
       }, warning: null };
     });
     await page.goto(`/?mockOnboarding=1&mockLocale=${locale}`);
@@ -17674,7 +18726,7 @@ test("local environment manual paths save, survive reopening, and preserve faile
   await modal.getByRole("button", { name: "Set up later" }).click();
   const env = modal.getByTestId("local-environment");
   await env.getByRole("button", { name: "Edit paths" }).click();
-  await expect(env.getByRole("textbox")).toHaveCount(7);
+  await expect(env.getByRole("textbox")).toHaveCount(8);
   await expect(env.getByRole("textbox", { name: "Python", exact: true })).toHaveValue("/mock/bin/python3");
   await env.getByRole("textbox", { name: "Python", exact: true }).fill("C:\\Custom Python\\python.exe");
   await expect(env.getByRole("textbox", { name: "Python", exact: true })).toBeFocused();
