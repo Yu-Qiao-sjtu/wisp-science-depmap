@@ -182,7 +182,14 @@ mocked packaging tests do not establish them.
 
 ## Windows code signing
 
-Windows Release and Windows WinUI Preview Release Authenticode-sign with an
+This fork's **Windows Release** workflow signs with SignPath when
+`SIGNPATH_API_TOKEN` is available. Repository variable
+`SKIP_WINDOWS_SIGNING=true` skips that step and still uploads the MSI and NSIS
+installers, which may be unsigned. That job does not use the eSigner secrets.
+The notes below describe the upstream eSigner path that
+`release-winui-preview.yml` and **Windows Test Signing** still follow.
+
+Windows WinUI Preview Release Authenticode-signs with an
 SSL.com Personal ID (IV) code signing certificate enrolled in eSigner. The
 credential id is `44eb788c-2a80-4f18-ae58-912d3298c053`. That id is not a secret;
 the values below exist only as GitHub Actions secrets:
@@ -228,11 +235,12 @@ and `settings-host/wisp-tauri.exe` before NSIS packages them, then signs each
 setup executable. Microsoft runtime DLLs are not re-signed. The NSIS-generated
 preview uninstaller is unsigned.
 
-A tag push or a dispatch with `publish=true` fails the job when signing fails,
-and does not upload unsigned installers. `SKIP_WINDOWS_SIGNING` is no longer
-read. The manual **Windows Build** workflow stays unsigned; it does not publish
-a release. **Windows Test Signing** is a manual Authenticode check against the
-same production credential and does not publish.
+A WinUI preview tag push or a dispatch with `publish=true` fails the job when
+eSigner signing fails, and does not upload unsigned preview installers.
+**Windows Release** still honors `SKIP_WINDOWS_SIGNING` and can upload unsigned
+MSI and NSIS installers. The manual **Windows Build** workflow stays unsigned;
+it does not publish a release. **Windows Test Signing** is a manual
+Authenticode check against the same production credential and does not publish.
 
 Signing dry-run (artifacts only, no release upload):
 
