@@ -333,10 +333,44 @@ class DepMapMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["server_build_identity"], "wisp-depmap-mcp-contract-14")
         self.assertTrue(evidence["capability_catalog_digest"].startswith("sha256:"))
         self.assertEqual(evidence["catalog_build_identity"], "catalog-missing")
+        self.assertEqual(evidence["status"], "catalog_unavailable")
+        self.assertEqual(evidence["qa_status"], "PASS")
+        self.assertEqual(
+            evidence["catalog_schema"],
+            {"state": "MISSING", "reason_code": "QUERY_INDEX_MISSING"},
+        )
+        self.assertNotIn(str(self.root), json.dumps(evidence["catalog_schema"]))
         self.assertEqual(
             evidence["capability_catalog_digest"],
             second["evidence"]["capability_catalog_digest"],
         )
+
+    async def test_status_reports_query_index_missing_reader_tables(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.executescript(
+                """
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE artifact_catalog (
+                  artifact_path TEXT PRIMARY KEY, integrity_state TEXT
+                );
+                """
+            )
+            db.execute(
+                "INSERT INTO metadata VALUES ('schema_version','6')"
+            )
+            db.commit()
+        write_index_digest(index)
+
+        evidence = (await self.service.status())["evidence"]
+
+        self.assertEqual(evidence["status"], "catalog_unavailable")
+        self.assertEqual(evidence["qa_status"], "PASS")
+        self.assertTrue(evidence["catalog_build_identity"].startswith("sha256:"))
+        self.assertEqual(evidence["catalog_schema"]["state"], "SCHEMA_INCOMPLETE")
+        self.assertEqual(evidence["catalog_schema"]["reason_code"], "QUERY_INDEX_SCHEMA")
+        self.assertIn("reader_coverage", evidence["catalog_schema"]["missing_tables"])
+        self.assertNotIn(str(self.root), json.dumps(evidence["catalog_schema"]))
 
     async def test_read_resource_recursively_makes_locations_portable(self):
         inside = self.root / "analysis-modules" / "分析 α" / "part-001.rds"
