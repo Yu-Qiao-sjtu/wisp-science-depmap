@@ -23,6 +23,15 @@ from services.depmap_mcp.portable_refs import PortableReferences
 Runner = Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 LOGGER = logging.getLogger("depmap_mcp.catalog_readers")
 
+# Tables CatalogReaderRegistry.resolve queries before any scientific adapter runs.
+REQUIRED_READER_TABLES = (
+    "reader_registry",
+    "reader_coverage",
+    "analysis_catalog",
+    "artifact_catalog",
+    "matrix_block_index",
+)
+
 # API modes are more granular than the public intent catalog. Each one must
 # still enter through a registered reader family before opening retained data.
 MODE_ALIASES = {
@@ -98,6 +107,44 @@ class CatalogReaderRegistry:
 
     def _verify_index(self):
         return resolve_index_artifact(self.index)
+
+    def index_schema_state(self) -> dict[str, Any]:
+        """Report whether the installed query index can resolve a reader.
+
+        Manifest QA and a content hash do not prove these tables exist. The
+        returned object never includes a filesystem path.
+        """
+        if not self.enabled:
+            return {"state": "MISSING", "reason_code": "QUERY_INDEX_MISSING"}
+        active_index, integrity = self._verify_index()
+        if integrity.state != VERIFIED:
+            return {
+                "state": "UNREADABLE",
+                "reason_code": integrity.reason_code or "QUERY_INDEX_INTEGRITY",
+            }
+        try:
+            with closing(
+                sqlite3.connect(
+                    f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True
+                )
+            ) as db:
+                present = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+        except sqlite3.Error:
+            LOGGER.exception("query index schema probe failed")
+            return {"state": "UNREADABLE", "reason_code": "QUERY_INDEX_UNREADABLE"}
+        missing = [name for name in REQUIRED_READER_TABLES if name not in present]
+        if missing:
+            return {
+                "state": "SCHEMA_INCOMPLETE",
+                "reason_code": "QUERY_INDEX_SCHEMA",
+                "missing_tables": missing,
+            }
+        return {"state": "READY", "reason_code": "QUERY_INDEX_READY"}
 
     def resolve(self, query: dict[str, Any]) -> CatalogResolution:
         mode = str(query.get("mode") or "")

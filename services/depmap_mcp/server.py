@@ -1439,8 +1439,10 @@ class DepMapEvidenceService:
                 return {"status": "INVALID_QA"}
         subtype_qa = read_qa(subtype_qa_path)
         coamp_qa = read_qa(coamp_qa_path)
+        catalog_schema = self.catalog_readers.index_schema_state()
         evidence = {
-            "status": "ready",
+            "status": "ready" if catalog_schema["state"] == "READY" else "catalog_unavailable",
+            "catalog_schema": catalog_schema,
             "qa_status": self.qa.get("qa_status"),
             "module_count": self.qa.get("module_count"),
             "query_contract_version": QUERY_CONTRACT_VERSION,

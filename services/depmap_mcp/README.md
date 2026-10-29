@@ -187,7 +187,13 @@ records may still require bounded string truncation or the compact fallback.
 
 `depmap_status` is also the deployment-integrity handshake. It publishes the
 query-contract version, server build identity, capability-catalog digest, and
-query-index build identity. Wisp checks that structured response before it
+query-index build identity. `evidence.status` is `ready` only when that index
+is installed, integrity-verified, and contains the reader tables
+(`reader_registry`, `reader_coverage`, `analysis_catalog`, `artifact_catalog`,
+`matrix_block_index`). Otherwise `status` is `catalog_unavailable` and
+`catalog_schema.state` is `MISSING`, `UNREADABLE`, or `SCHEMA_INCOMPLETE`.
+Manifest `qa_status` is unchanged: a PASS QA file does not mean gene queries
+can run. `catalog_schema` does not include the knowledge-root path. Wisp checks that structured response before it
 registers scientific DepMap tools. A missing or unsupported contract leaves
 only the status diagnostic available and reports `STALE_CONTRACT` or
 `INCOMPATIBLE_PROVIDER`; it never falls back to local files or SSH.
