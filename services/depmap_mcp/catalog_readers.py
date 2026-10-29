@@ -164,6 +164,13 @@ class CatalogReaderRegistry:
                 reader_mode=reader_mode,
                 reason="query index integrity validation failed",
             )
+        if self.index_schema_state()["state"] == "SCHEMA_INCOMPLETE":
+            return CatalogResolution(
+                "CATALOG_ERROR",
+                mode,
+                reader_mode=reader_mode,
+                reason="query index schema is missing required reader tables",
+            )
         try:
             with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
                 db.row_factory = sqlite3.Row

@@ -127,6 +127,26 @@ class CatalogContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(mcp._tool_manager.get_tool("depmap_pan_cancer_dependencies"))
         self.assertIsNotNone(mcp._tool_manager.get_tool("depmap_lineage_dependencies"))
 
+    def test_missing_reader_tables_are_a_schema_error_not_a_missing_file(self):
+        index = self.root / "depmap-26q1-query-index.sqlite"
+        with closing(sqlite3.connect(index)) as db:
+            db.execute(
+                "CREATE TABLE artifact_catalog (artifact_path TEXT PRIMARY KEY)"
+            )
+            db.commit()
+        write_index_digest(index)
+        registry = CatalogReaderRegistry(self.root, "26Q1")
+
+        resolution = registry.resolve({"mode": "core", "gene": "PTK7"})
+
+        self.assertTrue(registry.enabled)
+        self.assertEqual(resolution.state, "CATALOG_ERROR")
+        self.assertEqual(
+            resolution.reason,
+            "query index schema is missing required reader tables",
+        )
+        self.assertNotIn("no such table", resolution.reason or "")
+
 
 if __name__ == "__main__":
     unittest.main()
