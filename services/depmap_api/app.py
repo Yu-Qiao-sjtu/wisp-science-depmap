@@ -4444,10 +4444,18 @@ def create_app(settings: Settings | None = None, runner: Runner = run_bounded_qu
 
     @api.get("/api/v1/health", dependencies=[Depends(authorize)])
     async def health() -> dict[str, Any]:
+        from services.depmap_mcp.catalog_readers import CatalogReaderRegistry
+
         qa = verify_installation(api.state.settings)
+        readers = api.state.catalog_readers or CatalogReaderRegistry(
+            api.state.settings.knowledge_root,
+            api.state.settings.release,
+        )
+        catalog_schema = readers.index_schema_state()
         return {
             "schema_version": 1,
-            "status": "ready",
+            "status": "ready" if catalog_schema["state"] == "READY" else "catalog_unavailable",
+            "catalog_schema": catalog_schema,
             "release": qa["release"],
             "query_contract_version": QUERY_CONTRACT_VERSION,
             "coverage_manifest_version": coverage_manifest_version(api.state.settings.knowledge_root),

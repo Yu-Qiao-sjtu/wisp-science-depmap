@@ -12,8 +12,12 @@ desktop sends the keyring-backed token as `Authorization: Bearer <token>`. The
 
 `GET {endpoint}/health`
 
-Return JSON and a 2xx status only when the configured release and query index
-are ready. Recommended fields:
+Return JSON with HTTP 200 so a diagnostic body is readable. `status` is
+`ready` only when the configured release's query index is installed,
+integrity-verified, and contains the reader tables. Otherwise `status` is
+`catalog_unavailable` and `catalog_schema.state` is `MISSING`, `UNREADABLE`,
+or `SCHEMA_INCOMPLETE`. Manifest `qa_status` can still be `PASS`. Recommended
+fields:
 
 ```json
 {

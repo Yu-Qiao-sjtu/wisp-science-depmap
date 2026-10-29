@@ -166,6 +166,20 @@ class CatalogReaderRegistry:
             )
         try:
             with closing(sqlite3.connect(f"file:{active_index.as_posix()}?mode=ro&immutable=1", uri=True)) as db:
+                present = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                missing = [name for name in REQUIRED_READER_TABLES if name not in present]
+                if missing:
+                    return CatalogResolution(
+                        "CATALOG_ERROR",
+                        mode,
+                        reader_mode=reader_mode,
+                        reason="query index schema is missing required reader tables",
+                    )
                 db.row_factory = sqlite3.Row
                 reader = db.execute(
                     "SELECT r.query_mode,r.adapter,r.module_pattern,"

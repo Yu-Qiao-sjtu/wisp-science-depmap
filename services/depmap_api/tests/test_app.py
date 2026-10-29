@@ -359,7 +359,11 @@ class DepMapApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/health").status_code, 401)
         response = self.client.get("/api/v1/health", headers=self.headers)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "ready")
+        self.assertEqual(response.json()["status"], "catalog_unavailable")
+        self.assertEqual(
+            response.json()["catalog_schema"],
+            {"state": "MISSING", "reason_code": "QUERY_INDEX_MISSING"},
+        )
         self.assertEqual(response.json()["release"], "26Q1")
         self.assertEqual(response.json()["query_contract_version"], 14)
         self.assertIn("lineage_mutation_dependency", response.json()["query_modes"])
